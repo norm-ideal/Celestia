@@ -1371,7 +1371,7 @@ bool Star::createStar(Star* star,
             string barycenterName;
             if (starData->getString("OrbitBarycenter", barycenterName))
             {
-                barycenterCatNo   = db->findCatalogNumberByName(barycenterName);
+                barycenterCatNo   = db->findMainIndexByName(barycenterName);
                 barycenterDefined = true;
             }
             else if (starData->getNumber("OrbitBarycenter", barycenterCatNo))
