@@ -1135,8 +1135,6 @@ void Star::setLuminosity(float lum)
 
 StarDetails* Star::getDetails() const
 {
-    if (details == nullptr)
-        clog << "Details of star nr " << getMainIndexNumber() << " is null pointer! Disaster is coming!\n";
     return details;
 }
 
@@ -1148,7 +1146,7 @@ void Star::setDetails(StarDetails* sd)
 
 void Star::setOrbitBarycenter(Star* s)
 {
-    if (getDetails()->shared())
+    if (details->shared())
         details = new StarDetails(*details);
     getDetails()->setOrbitBarycenter(s);
 }
@@ -1371,7 +1369,7 @@ bool Star::createStar(Star* star,
             string barycenterName;
             if (starData->getString("OrbitBarycenter", barycenterName))
             {
-                barycenterCatNo   = db->findMainIndexByName(barycenterName);
+                barycenterCatNo   = db->nameToIndex(barycenterName);
                 barycenterDefined = true;
             }
             else if (starData->getNumber("OrbitBarycenter", barycenterCatNo))
@@ -1401,7 +1399,7 @@ bool Star::createStar(Star* star,
 
                 if (!hasBarycenter)
                 {
-                    fmt::fprintf(cerr, _("Barycenter %s of star nr %u does not exist.\n"), barycenterName, star->getMainIndexNumber());
+                    fmt::fprintf(cerr, _("Barycenter %s of star nr %u does not exist.\n"), barycenterName, star->getIndex());
                     delete rm;
                     if (free_details)
                         delete details;

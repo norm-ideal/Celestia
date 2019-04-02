@@ -138,7 +138,7 @@ int EclipseFinder::CalculateEclipses() // XXX: this function is very fragile and
         delete eclipse;
         return 1;
     }
-    if (sys->getStar()->getMainIndexNumber() != 0)
+    if (sys->getStar()->getIndex() != 0)
     {
         eclipse = new Eclipse(0.);
         eclipse->planete = "None";

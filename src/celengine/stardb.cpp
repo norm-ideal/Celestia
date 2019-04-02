@@ -62,7 +62,7 @@ struct CatalogNumberOrderingPredicate
 
     bool operator()(const Star& star0, const Star& star1) const
     {
-        return (star0.getMainIndexNumber() < star1.getMainIndexNumber());
+        return (star0.getIndex() < star1.getIndex());
     }
 };
 
@@ -75,7 +75,7 @@ struct CatalogNumberEquivalencePredicate
 
     bool operator()(const Star& star0, const Star& star1) const
     {
-        return (star0.getMainIndexNumber() == star1.getMainIndexNumber());
+        return (star0.getIndex() == star1.getIndex());
     }
 };
 
@@ -89,7 +89,7 @@ struct PtrCatalogNumberOrderingPredicate
 
     bool operator()(const Star* const & star0, const Star* const & star1) const
     {
-        return (star0->getMainIndexNumber() < star1->getMainIndexNumber());
+        return (star0->getIndex() < star1->getIndex());
     }
 };
 
@@ -197,14 +197,14 @@ StarDatabase::~StarDatabase()
 Star* StarDatabase::find(uint32_t catalogNumber) const
 {
     Star refStar;
-    refStar.setMainIndexNumber(catalogNumber);
+    refStar.setIndex(catalogNumber);
 
     Star** star   = lower_bound(catalogNumberIndex,
                                 catalogNumberIndex + nStars,
                                 &refStar,
                                 PtrCatalogNumberOrderingPredicate());
 
-    if (star != catalogNumberIndex + nStars && (*star)->getMainIndexNumber() == catalogNumber)
+    if (star != catalogNumberIndex + nStars && (*star)->getIndex() == catalogNumber)
         return *star;
     else
         return nullptr;
@@ -369,7 +369,7 @@ static string catalogNumberToString(uint32_t catalogNumber)
 // required as it's all wrapped in the string class.)
 string StarDatabase::getStarName(const Star& star, bool i18n) const
 {
-    uint32_t catalogNumber = star.getMainIndexNumber();
+    uint32_t catalogNumber = star.getIndex();
 
     if (namesDB != nullptr)
     {
@@ -385,7 +385,7 @@ string StarDatabase::getStarName(const Star& star, bool i18n) const
 
     /*
       // Get the HD catalog name
-      if (star.getMainIndexNumber() != AstroCatalog::InvalidIndex)
+      if (star.getIndex() != AstroCatalog::InvalidIndex)
       return fmt::sprintf("HD %d", star.getCatalogNumber(Star::HDCatalog));
       else
     */
@@ -399,7 +399,7 @@ void StarDatabase::getStarName(const Star& star, char* nameBuffer, unsigned int 
 {
     assert(bufferSize != 0);
 
-    uint32_t catalogNumber = star.getMainIndexNumber();
+    uint32_t catalogNumber = star.getIndex();
 
     if (namesDB != nullptr)
     {
@@ -424,7 +424,7 @@ void StarDatabase::getStarName(const Star& star, char* nameBuffer, unsigned int 
 string StarDatabase::getStarNameList(const Star& star, const unsigned int maxNames) const
 {
     string starNames;
-    unsigned int catalogNumber = star.getMainIndexNumber();
+    unsigned int catalogNumber = star.getIndex();
     StarNameDatabase::NumberIndex::const_iterator iter = namesDB->getFirstNameIter(catalogNumber);
 
     unsigned int count = 0;
@@ -678,7 +678,7 @@ bool StarDatabase::loadBinary(istream& in)
         }
 
         star.setDetails(details);
-        star.setMainIndexNumber(catNo);
+        star.setIndex(catNo);
         unsortedStars.add(star);
 
         nStars++;
@@ -988,7 +988,7 @@ bool StarDatabase::createStar(Star* star,
     if (!modifyExistingDetails)
         star->setDetails(details);
     if (disposition != DataDisposition::Modify)
-        star->setMainIndexNumber(catalogNumber);
+        star->setIndex(catalogNumber);
 
     // Compute the position in rectangular coordinates.  If a star has an
     // orbit and barycenter, it's position is the position of the barycenter.
@@ -1443,14 +1443,14 @@ Star* StarDatabase::findWhileLoading(uint32_t catalogNumber) const
     if (binFileCatalogNumberIndex != nullptr)
     {
         Star refStar;
-        refStar.setMainIndexNumber(catalogNumber);
+        refStar.setIndex(catalogNumber);
 
         Star** star   = lower_bound(binFileCatalogNumberIndex,
                                     binFileCatalogNumberIndex + binFileStarCount,
                                     &refStar,
                                     PtrCatalogNumberOrderingPredicate());
 
-        if (star != binFileCatalogNumberIndex + binFileStarCount && (*star)->getMainIndexNumber() == catalogNumber)
+        if (star != binFileCatalogNumberIndex + binFileStarCount && (*star)->getIndex() == catalogNumber)
             return *star;
     }
 
