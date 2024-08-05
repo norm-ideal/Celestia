@@ -9,7 +9,6 @@
 
 #include "multitexture.h"
 #include "texmanager.h"
-#include <celutil/debug.h>
 
 using namespace std;
 
@@ -32,14 +31,15 @@ MultiResTexture::MultiResTexture(ResourceHandle loTex,
 }
 
 
-MultiResTexture::MultiResTexture(const string& source,
-                                 const string& path)
+MultiResTexture::MultiResTexture(const fs::path& source,
+                                 const fs::path& path)
 {
     setTexture(source, path);
 }
 
 
-void MultiResTexture::setTexture(const string& source, const string& path,
+void MultiResTexture::setTexture(const fs::path& source,
+                                 const fs::path& path,
                                  unsigned int flags)
 {
     TextureManager* texMan = GetTextureManager();
@@ -49,8 +49,10 @@ void MultiResTexture::setTexture(const string& source, const string& path,
 }
 
 
-void MultiResTexture::setTexture(const string& source, const string& path,
-                                 float bumpHeight, unsigned int flags)
+void MultiResTexture::setTexture(const fs::path& source,
+                                 const fs::path& path,
+                                 float bumpHeight,
+                                 unsigned int flags)
 {
     TextureManager* texMan = GetTextureManager();
     tex[lores] = texMan->getHandle(TextureInfo(source, path, bumpHeight, flags, lores));

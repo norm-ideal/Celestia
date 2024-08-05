@@ -7,122 +7,144 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#ifndef _CELUTIL_COLOR_H_
-#define _CELUTIL_COLOR_H_
+#pragma once
 
-#include <map>
-#include <string>
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <string_view>
+
 #include <Eigen/Core>
 
 
 class Color
 {
- public:
-    Color();
-    Color(float, float, float);
-    Color(float, float, float, float);
-    Color(unsigned char, unsigned char, unsigned char);
-    Color(const Color&, float);
+ private:
+    static constexpr std::uint8_t scaleFloat(float a)
+    {
+        return static_cast<std::uint8_t>(std::clamp(a, 0.0f, 1.0f) * 255.99f);
+    }
 
-    enum {
+    std::array<std::uint8_t, 4> c;
+
+ public:
+    constexpr Color() noexcept :
+        c({ 0, 0, 0, 0xff })
+    {}
+    constexpr Color(float r, float g, float b, float a) noexcept :
+        c({ scaleFloat(r), scaleFloat(g), scaleFloat(b), scaleFloat(a) })
+    {}
+    constexpr Color(float r, float g, float b) noexcept :
+        Color(r, g, b, 1.0f)
+    {}
+    constexpr Color(std::uint8_t r, std::uint8_t g, std::uint8_t b, std::uint8_t a) noexcept :
+        c({ r, g, b, a })
+    {}
+    constexpr Color(std::uint8_t r, std::uint8_t g, std::uint8_t b) noexcept:
+        Color(r, g, b, 0xff)
+    {}
+    constexpr Color(const Color &color, float alpha) noexcept :
+        Color(color.red(), color.green(), color.blue(), alpha)
+    {}
+    Color(const Eigen::Vector3f &v) noexcept :
+        Color(v.x(), v.y(), v.z())
+    {}
+    Color(const Eigen::Vector4f &v) noexcept :
+        Color(v.x(), v.y(), v.z(), v.w())
+    {}
+
+    enum
+    {
         Red    = 0,
         Green  = 1,
         Blue   = 2,
         Alpha  = 3
     };
 
-    inline float red() const;
-    inline float green() const;
-    inline float blue() const;
-    inline float alpha() const;
-    inline void get(unsigned char*) const;
+    constexpr float red() const { return static_cast<float>(c[Red]) * (1.0f / 255.0f); }
+    constexpr float green() const { return static_cast<float>(c[Green]) * (1.0f / 255.0f); }
+    constexpr float blue() const { return static_cast<float>(c[Blue]) * (1.0f / 255.0f); }
+    constexpr float alpha() const { return static_cast<float>(c[Alpha]) * (1.0f / 255.0f); }
+    inline Color& alpha(float a)
+    {
+        c[Alpha] = scaleFloat(a);
+        return *this;
+    }
 
-    inline Eigen::Vector3f toVector3() const;
-    inline Eigen::Vector4f toVector4() const;
+    inline void get(std::uint8_t *rgba) const
+    {
+        rgba[0] = c[Red];
+        rgba[1] = c[Green];
+        rgba[2] = c[Blue];
+        rgba[3] = c[Alpha];
+    }
 
-    friend bool operator==(Color, Color);
-    friend bool operator!=(Color, Color);
-    friend Color operator*(Color, Color);
+    constexpr const std::uint8_t* data() const { return c.data(); }
 
-    static const Color Black;
-    static const Color White;
+    /** Return the color as a vector, with red, green, and blue in the
+     *  the x, y, and z components of the vector. Each component is a
+     *  floating point value between 0 and 1, inclusive.
+     */
+    inline Eigen::Vector3f toVector3() const { return { red(), green(), blue() }; }
 
-    static bool parse(const char*, Color&);
+    /** Return the color as a vector, with red, green, blue, and alpha in the
+     *  the x, y, z, and w components of the vector. Each component is a
+     *  floating point value between 0 and 1, inclusive.
+     */
+    inline Eigen::Vector4f toVector4() const { return { red(), green(), blue(), alpha() }; }
 
- private:
-    static void buildX11ColorMap();
+    constexpr Color& operator*=(float m)
+    {
+        c[Red] = scaleFloat(red() * m);
+        c[Green] = scaleFloat(green() * m);
+        c[Blue] = scaleFloat(blue() * m);
+        return *this;
+    }
 
- private:
-    unsigned char c[4];
+    constexpr Color& operator*=(const Color& rhs)
+    {
+        c[Red] = scaleFloat(red() * rhs.red());
+        c[Green] = scaleFloat(green() * rhs.green());
+        c[Blue] = scaleFloat(blue() * rhs.blue());
+        c[Alpha] = scaleFloat(alpha() * rhs.alpha());
+        return *this;
+    }
 
-    typedef std::map<const std::string, Color> ColorMap;
-    static ColorMap x11Colors;
+    friend constexpr bool operator==(Color, Color);
+
+    static /*constexpr*/ const Color Black/* = Color(1.0f, 1.0f, 1.0f)*/;
+    static /*constexpr*/ const Color White/* = Color(0.0f,0.0f, 0.0f)*/;
+
+    static Color fromHSV(float h, float s, float v);
+
+    static bool parse(std::string_view, Color&);
 };
 
-
-float Color::red() const
+constexpr bool operator==(Color a, Color b)
 {
-    return c[Red] * (1.0f / 255.0f);
-}
-
-float Color::green() const
-{
-    return c[Green] * (1.0f / 255.0f);
-}
-
-float Color::blue() const
-{
-    return c[Blue] * (1.0f / 255.0f);
-}
-
-float Color::alpha() const
-{
-    return c[Alpha] * (1.0f / 255.0f);
-}
-
-void Color::get(unsigned char* rgba) const
-{
-    rgba[0] = c[Red];
-    rgba[1] = c[Green];
-    rgba[2] = c[Blue];
-    rgba[3] = c[Alpha];
-}
-
-/** Return the color as a vector, with red, green, and blue in the
- *  the x, y, and z components of the vector. Each component is a
- *  floating point value between 0 and 1, inclusive.
- */
-Eigen::Vector3f Color::toVector3() const
-{
-    return Eigen::Vector3f(red(), green(), blue());
-}
-
-/** Return the color as a vector, with red, green, blue, and alpha in the
- *  the x, y, z, and w components of the vector. Each component is a
- *  floating point value between 0 and 1, inclusive.
- */
-Eigen::Vector4f Color::toVector4() const
-{
-    return Eigen::Vector4f(red(), green(), blue(), alpha());
-}
-
-inline bool operator==(Color a, Color b)
-{
-    return (a.c[0] == b.c[2] && a.c[1] == b.c[1] &&
+    return (a.c[0] == b.c[0] && a.c[1] == b.c[1] &&
             a.c[2] == b.c[2] && a.c[3] == b.c[3]);
 }
 
-inline bool operator!=(Color a, Color b)
+constexpr bool operator!=(Color a, Color b)
 {
     return !(a == b);
 }
 
-inline Color operator*(Color a, Color b)
+constexpr Color operator*(Color a, float b)
 {
-    return Color(a.red() * b.red(),
-                 a.green() * b.green(),
-                 a.blue() * b.blue(),
-                 a.alpha() * b.alpha());
+    a *= b;
+    return a;
 }
 
-#endif // _CELUTIL_COLOR_H_
+constexpr Color operator*(float a, Color b)
+{
+    b *= a;
+    return b;
+}
+
+constexpr Color operator*(Color a, const Color& b)
+{
+    a *= b;
+    return a;
+}

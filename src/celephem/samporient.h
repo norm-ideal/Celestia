@@ -7,12 +7,17 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#ifndef _CELENGINE_SAMPORIENT_H_
-#define _CELENGINE_SAMPORIENT_H_
+#pragma once
 
-#include "rotation.h"
-#include <string>
+#include <memory>
 
-extern RotationModel* LoadSampledOrientation(const std::string& filename);
+#include <celcompat/filesystem.h>
 
-#endif // _CELENGINE_SAMPORIENT_H_
+namespace celestia::ephem
+{
+
+class RotationModel;
+
+std::shared_ptr<const RotationModel> LoadSampledOrientation(const fs::path& filename);
+
+}

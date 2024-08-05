@@ -7,16 +7,18 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#ifndef CELENGINE_MARKER_H_
-#define CELENGINE_MARKER_H_
+#pragma once
 
 #include <vector>
 #include <string>
 #include <celutil/color.h>
 #include <celengine/selection.h>
-#include <celutil/debug.h>
 
+class Renderer;
+struct Matrices;
 
+namespace celestia
+{
 class MarkerRepresentation
 {
 public:
@@ -37,36 +39,32 @@ public:
         Crosshair  = 12,
     };
 
-    MarkerRepresentation(Symbol symbol = MarkerRepresentation::Diamond,
-                         float size = 10.0f,
-                         Color color = Color::White,
-                         const std::string& label = "") :
+    explicit MarkerRepresentation(Symbol symbol = MarkerRepresentation::Diamond,
+                                  float size = 10.0f,
+                                  Color color = Color::White,
+                                  std::string label = {}) :
         m_symbol(symbol),
         m_size(size),
         m_color(color),
-        m_label(label)
+        m_label(std::move(label))
     {
     }
-
-    MarkerRepresentation(const MarkerRepresentation& rep);
-
-    MarkerRepresentation& operator=(const MarkerRepresentation& rep);
 
     Symbol symbol() const { return m_symbol; }
     Color color() const { return m_color; }
     void setColor(Color);
     float size() const { return m_size; }
     void setSize(float size);
-    string label() const { return m_label; }
-    void setLabel(const std::string&);
+    const std::string& label() const { return m_label; }
+    void setLabel(std::string);
 
-    void render(float size) const;
+    void render(Renderer &r, float size, const Matrices &m) const;
 
 private:
     Symbol m_symbol;
     float m_size;
     Color m_color;
-    string m_label;
+    std::string m_label;
 };
 
 
@@ -104,7 +102,7 @@ class Marker
     MarkerRepresentation& representation() { return m_representation; }
     void setRepresentation(const MarkerRepresentation& rep);
 
-    void render(float size) const;
+    void render(Renderer &r, float size, const Matrices &m) const;
 
  private:
     Selection m_object;
@@ -115,5 +113,4 @@ class Marker
 };
 
 typedef std::vector<Marker> MarkerList;
-
-#endif // CELENGINE_MARKER_H_
+}

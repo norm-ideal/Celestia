@@ -7,17 +7,59 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#include <iostream>
+#include <celutil/logger.h>
 #include "glshader.h"
-#include <GL/glew.h>
 
-using namespace std;
-
-
-static const string GetInfoLog(GLuint obj);
+using celestia::util::GetLogger;
 
 
-ostream* g_shaderLogFile = nullptr;
+namespace
+{
+std::string
+GetInfoLog(GLuint obj)
+{
+    GLint logLength = 0;
+    GLsizei charsWritten = 0;
+
+    enum { Unknown, Shader, Program } kind;
+
+    if (glIsShader(obj))
+    {
+        kind = Shader;
+    }
+    else if (glIsProgram(obj))
+    {
+        kind = Program;
+    }
+    else
+    {
+        GetLogger()->error("Unknown object passed to GetInfoLog()!\n");
+        return std::string();
+    }
+
+    if (kind == Shader)
+        glGetShaderiv(obj, GL_INFO_LOG_LENGTH, &logLength);
+    else
+        glGetProgramiv(obj, GL_INFO_LOG_LENGTH, &logLength);
+
+    if (logLength <= 0)
+        return std::string();
+
+    auto* log = new char[logLength];
+
+    if (kind == Shader)
+        glGetShaderInfoLog(obj, logLength, &charsWritten, log);
+    else
+        glGetProgramInfoLog(obj, logLength, &charsWritten, log);
+
+    std::string s(log, charsWritten);
+    delete[] log;
+
+    return s;
+}
+} // end unnamed namespace
+
+std::ostream* g_shaderLogFile = nullptr;
 
 
 GLShader::GLShader(GLuint _id) :
@@ -34,10 +76,10 @@ GLShader::getID() const
 
 
 GLShaderStatus
-GLShader::compile(const vector<string>& source)
+GLShader::compile(const std::vector<std::string>& source)
 {
     if (source.empty())
-        return ShaderStatus_EmptyProgram;
+        return GLShaderStatus::EmptyProgram;
 
     // Convert vector of shader source strings to an array for OpenGL
     const auto** sourceStrings = new const char*[source.size()];
@@ -54,9 +96,9 @@ GLShader::compile(const vector<string>& source)
     GLint compileSuccess;
     glGetShaderiv(id, GL_COMPILE_STATUS, &compileSuccess);
     if (compileSuccess != GL_TRUE)
-        return ShaderStatus_CompileError;
+        return GLShaderStatus::CompileError;
 
-    return ShaderStatus_OK;
+    return GLShaderStatus::OK;
 }
 
 
@@ -68,11 +110,6 @@ GLShader::~GLShader()
 
 
 //************* GLxxxProperty **********
-
-FloatShaderParameter::FloatShaderParameter() :
-    slot(-1)
-{
-}
 
 FloatShaderParameter::FloatShaderParameter(GLuint obj, const char* name)
 {
@@ -88,10 +125,19 @@ FloatShaderParameter::operator=(float f)
 }
 
 
-Vec3ShaderParameter::Vec3ShaderParameter() :
-    slot(-1)
+Vec2ShaderParameter::Vec2ShaderParameter(GLuint obj, const char* name)
 {
+    slot = glGetUniformLocation(obj, name);
 }
+
+Vec2ShaderParameter&
+Vec2ShaderParameter::operator=(const Eigen::Vector2f& v)
+{
+    if (slot != -1)
+        glUniform2fv(slot, 1, v.data());
+    return *this;
+}
+
 
 Vec3ShaderParameter::Vec3ShaderParameter(GLuint obj, const char* name)
 {
@@ -106,10 +152,6 @@ Vec3ShaderParameter::operator=(const Eigen::Vector3f& v)
     return *this;
 }
 
-Vec4ShaderParameter::Vec4ShaderParameter() :
-    slot(-1)
-{
-}
 
 Vec4ShaderParameter::Vec4ShaderParameter(GLuint obj, const char* name)
 {
@@ -121,6 +163,48 @@ Vec4ShaderParameter::operator=(const Eigen::Vector4f& v)
 {
     if (slot != -1)
         glUniform4fv(slot, 1, v.data());
+    return *this;
+}
+
+
+IntegerShaderParameter::IntegerShaderParameter(GLuint obj, const char* name)
+{
+    slot = glGetUniformLocation(obj, name);
+}
+
+IntegerShaderParameter&
+IntegerShaderParameter::operator=(int i)
+{
+    if (slot != -1)
+        glUniform1i(slot, i);
+    return *this;
+}
+
+
+Mat3ShaderParameter::Mat3ShaderParameter(GLuint obj, const char* name)
+{
+    slot = glGetUniformLocation(obj, name);
+}
+
+Mat3ShaderParameter&
+Mat3ShaderParameter::operator=(const Eigen::Matrix3f& v)
+{
+    if (slot != -1)
+        glUniformMatrix3fv(slot, 1, GL_FALSE, v.data());
+    return *this;
+}
+
+
+Mat4ShaderParameter::Mat4ShaderParameter(GLuint obj, const char* name)
+{
+    slot = glGetUniformLocation(obj, name);
+}
+
+Mat4ShaderParameter&
+Mat4ShaderParameter::operator=(const Eigen::Matrix4f& v)
+{
+    if (slot != -1)
+        glUniformMatrix4fv(slot, 1, GL_FALSE, v.data());
     return *this;
 }
 
@@ -167,17 +251,17 @@ GLProgram::link()
             *g_shaderLogFile << "Error linking shader program:\n";
             *g_shaderLogFile << GetInfoLog(getID());
         }
-        return ShaderStatus_LinkError;
+        return GLShaderStatus::LinkError;
     }
 
-    return ShaderStatus_OK;
+    return GLShaderStatus::OK;
 }
 
 
 //************* GLShaderLoader ************
 
 GLShaderStatus
-GLShaderLoader::CreateVertexShader(const vector<string>& source,
+GLShaderLoader::CreateVertexShader(const std::vector<std::string>& source,
                                    GLVertexShader** vs)
 {
     GLuint vsid = glCreateShader(GL_VERTEX_SHADER);
@@ -185,7 +269,7 @@ GLShaderLoader::CreateVertexShader(const vector<string>& source,
     auto* shader = new GLVertexShader(vsid);
 
     GLShaderStatus status = shader->compile(source);
-    if (status != ShaderStatus_OK)
+    if (status != GLShaderStatus::OK)
     {
         if (g_shaderLogFile != nullptr)
         {
@@ -198,12 +282,12 @@ GLShaderLoader::CreateVertexShader(const vector<string>& source,
 
     *vs = shader;
 
-    return ShaderStatus_OK;
+    return GLShaderStatus::OK;
 }
 
 
 GLShaderStatus
-GLShaderLoader::CreateFragmentShader(const vector<string>& source,
+GLShaderLoader::CreateFragmentShader(const std::vector<std::string>& source,
                                      GLFragmentShader** fs)
 {
     GLuint fsid = glCreateShader(GL_FRAGMENT_SHADER);
@@ -211,7 +295,7 @@ GLShaderLoader::CreateFragmentShader(const vector<string>& source,
     auto* shader = new GLFragmentShader(fsid);
 
     GLShaderStatus status = shader->compile(source);
-    if (status != ShaderStatus_OK)
+    if (status != GLShaderStatus::OK)
     {
         if (g_shaderLogFile != nullptr)
         {
@@ -224,26 +308,51 @@ GLShaderLoader::CreateFragmentShader(const vector<string>& source,
 
     *fs = shader;
 
-    return ShaderStatus_OK;
+    return GLShaderStatus::OK;
 }
 
 
 GLShaderStatus
-GLShaderLoader::CreateVertexShader(const string& source,
+GLShaderLoader::CreateGeometryShader(const std::vector<std::string>& source,
+                                     GLGeometryShader** gs)
+{
+    GLuint vsid = glCreateShader(GL_GEOMETRY_SHADER);
+
+    auto* shader = new GLGeometryShader(vsid);
+
+    GLShaderStatus status = shader->compile(source);
+    if (status != GLShaderStatus::OK)
+    {
+        if (g_shaderLogFile != nullptr)
+        {
+            *g_shaderLogFile << "Error compiling geometry shader:\n";
+            *g_shaderLogFile << GetInfoLog(shader->getID());
+        }
+        delete shader;
+        return status;
+    }
+
+    *gs = shader;
+
+    return GLShaderStatus::OK;
+}
+
+GLShaderStatus
+GLShaderLoader::CreateVertexShader(const std::string& source,
                                    GLVertexShader** vs)
 
 {
-    vector<string> v;
+    std::vector<std::string> v;
     v.push_back(source);
     return CreateVertexShader(v, vs);
 }
 
 
 GLShaderStatus
-GLShaderLoader::CreateFragmentShader(const string& source,
+GLShaderLoader::CreateFragmentShader(const std::string& source,
                                      GLFragmentShader** fs)
 {
-    vector<string> v;
+    std::vector<std::string> v;
     v.push_back(source);
     return CreateFragmentShader(v, fs);
 }
@@ -263,23 +372,23 @@ GLShaderLoader::CreateProgram(const GLVertexShader& vs,
 
     *progOut = prog;
 
-    return ShaderStatus_OK;
+    return GLShaderStatus::OK;
 }
 
 
 GLShaderStatus
-GLShaderLoader::CreateProgram(const vector<string>& vsSource,
-                              const vector<string>& fsSource,
+GLShaderLoader::CreateProgram(const std::vector<std::string>& vsSource,
+                              const std::vector<std::string>& fsSource,
                               GLProgram** progOut)
 {
     GLVertexShader* vs = nullptr;
     GLShaderStatus status = CreateVertexShader(vsSource, &vs);
-    if (status != ShaderStatus_OK)
+    if (status != GLShaderStatus::OK)
         return status;
 
     GLFragmentShader* fs = nullptr;
     status = CreateFragmentShader(fsSource, &fs);
-    if (status != ShaderStatus_OK)
+    if (status != GLShaderStatus::OK)
     {
         delete vs;
         return status;
@@ -287,7 +396,7 @@ GLShaderLoader::CreateProgram(const vector<string>& vsSource,
 
     GLProgram* prog = nullptr;
     status = CreateProgram(*vs, *fs, &prog);
-    if (status != ShaderStatus_OK)
+    if (status != GLShaderStatus::OK)
     {
         delete vs;
         delete fs;
@@ -300,40 +409,100 @@ GLShaderLoader::CreateProgram(const vector<string>& vsSource,
     delete vs;
     delete fs;
 
-    return ShaderStatus_OK;
+    return GLShaderStatus::OK;
 }
 
 
 GLShaderStatus
-GLShaderLoader::CreateProgram(const string& vsSource,
-                              const string& fsSource,
+GLShaderLoader::CreateProgram(const GLVertexShader& vs,
+                              const GLGeometryShader& gs,
+                              const GLFragmentShader& fs,
                               GLProgram** progOut)
 {
-    vector<string> vsSourceVec;
-    vsSourceVec.push_back(vsSource);
-    vector<string> fsSourceVec;
-    fsSourceVec.push_back(fsSource);
+    GLuint progid = glCreateProgram();
+
+    auto* prog = new GLProgram(progid);
+
+    prog->attach(vs);
+    prog->attach(gs);
+    prog->attach(fs);
+
+    *progOut = prog;
+
+    return GLShaderStatus::OK;
+}
+
+
+GLShaderStatus
+GLShaderLoader::CreateProgram(const std::vector<std::string>& vsSource,
+                              const std::vector<std::string>& gsSource,
+                              const std::vector<std::string>& fsSource,
+                              GLProgram** progOut)
+{
+    GLVertexShader* vs = nullptr;
+    GLShaderStatus status = CreateVertexShader(vsSource, &vs);
+    if (status != GLShaderStatus::OK)
+        return status;
+
+    GLFragmentShader* fs = nullptr;
+    status = CreateFragmentShader(fsSource, &fs);
+    if (status != GLShaderStatus::OK)
+    {
+        delete vs;
+        return status;
+    }
+
+    GLGeometryShader* gs = nullptr;
+    status = CreateGeometryShader(gsSource, &gs);
+    if (status != GLShaderStatus::OK)
+    {
+        delete vs;
+        delete fs;
+        return status;
+    }
+
+    GLProgram* prog = nullptr;
+    status = CreateProgram(*vs, *gs, *fs, &prog);
+    if (status != GLShaderStatus::OK)
+    {
+        delete vs;
+        delete gs;
+        delete fs;
+        return status;
+    }
+
+    *progOut = prog;
+
+    // No need to keep these around--the program doesn't reference them
+    delete vs;
+    delete gs;
+    delete fs;
+
+    return GLShaderStatus::OK;
+}
+
+
+GLShaderStatus
+GLShaderLoader::CreateProgram(const std::string& vsSource,
+                              const std::string& fsSource,
+                              GLProgram** progOut)
+{
+    std::vector<std::string> vsSourceVec { vsSource };
+    std::vector<std::string> fsSourceVec { fsSource };
 
     return CreateProgram(vsSourceVec, fsSourceVec, progOut);
 }
 
 
-const string
-GetInfoLog(GLuint obj)
+GLShaderStatus
+GLShaderLoader::CreateProgram(const std::string& vsSource,
+                              const std::string& gsSource,
+                              const std::string& fsSource,
+                              GLProgram** progOut)
 {
-    GLint logLength = 0;
-    GLsizei charsWritten = 0;
+    std::vector<std::string> vsSourceVec { vsSource };
+    std::vector<std::string> gsSourceVec { gsSource };
+    std::vector<std::string> fsSourceVec { fsSource };
 
-    glGetShaderiv(obj, GL_INFO_LOG_LENGTH, &logLength);
-    if (logLength <= 0)
-        return string();
-
-    auto* log = new char[logLength];
-
-    glGetShaderInfoLog(obj, logLength, &charsWritten, log);
-
-    string s(log, charsWritten);
-    delete[] log;
-
-    return s;
+    return CreateProgram(vsSourceVec, gsSourceVec, fsSourceVec, progOut);
 }

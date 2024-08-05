@@ -2,7 +2,7 @@
 //
 // Visible region reference mark for ellipsoidal bodies.
 //
-// Copyright (C) 2008, the Celestia Development Team
+// Copyright (C) 2008-present, the Celestia Development Team
 // Initial version by Chris Laurel, claurel@gmail.com
 //
 // This program is free software; you can redistribute it and/or
@@ -10,18 +10,20 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#include "render.h"
-#include "visibleregion.h"
-#include "body.h"
-#include "selection.h"
-#include "vecgl.h"
-#include <celmath/intersect.h>
-#include <Eigen/Core>
-#include <Eigen/Geometry>
 #include <cmath>
+#include <Eigen/Geometry>
+#include <celcompat/numbers.h>
+#include <celmath/intersect.h>
+#include <celrender/linerenderer.h>
+#include "body.h"
+#include "render.h"
+#include "selection.h"
+#include "visibleregion.h"
 
+using namespace std;
 using namespace Eigen;
-
+using celestia::render::LineRenderer;
+namespace math = celestia::math;
 
 
 /*! Construct a new reference mark that shows the outline of the
@@ -39,11 +41,7 @@ VisibleRegion::VisibleRegion(const Body& body, const Selection& target) :
     m_body(body),
     m_target(target),
     m_color(1.0f, 1.0f, 0.0f),
-#ifdef USE_HDR
-    m_opacity(0.0f)
-#else
     m_opacity(1.0f)
-#endif
 {
     setTag("visible region");
 }
@@ -74,69 +72,22 @@ void
 VisibleRegion::setOpacity(float opacity)
 {
     m_opacity = opacity;
-#ifdef USE_HDR
-    m_opacity = 1.0f - opacity;
-#endif
 }
 
 
-template <typename T> static Matrix<T, 3, 1>
-ellipsoidTangent(const Matrix<T, 3, 1>& recipSemiAxes,
-                 const Matrix<T, 3, 1>& w,
-                 const Matrix<T, 3, 1>& e,
-                 const Matrix<T, 3, 1>& e_,
-                 T ee)
-{
-    // We want to find t such that -E(1-t) + Wt is the direction of a ray
-    // tangent to the ellipsoid.  A tangent ray will intersect the ellipsoid
-    // at exactly one point.  Finding the intersection between a ray and an
-    // ellipsoid ultimately requires using the quadratic formula, which has
-    // one solution when the discriminant (b^2 - 4ac) is zero.  The code below
-    // computes the value of t that results in a discriminant of zero.
-    Matrix<T, 3, 1> w_ = w.cwiseProduct(recipSemiAxes);//(w.x * recipSemiAxes.x, w.y * recipSemiAxes.y, w.z * recipSemiAxes.z);
-    T ww = w_.dot(w_);
-    T ew = w_.dot(e_);
-
-    // Before elimination of terms:
-    // double a =  4 * square(ee + ew) - 4 * (ee + 2 * ew + ww) * (ee - 1.0f);
-    // double b = -8 * ee * (ee + ew)  - 4 * (-2 * (ee + ew) * (ee - 1.0f));
-    // double c =  4 * ee * ee         - 4 * (ee * (ee - 1.0f));
-
-    // Simplify the below expression and eliminate the ee^2 terms; this
-    // prevents precision errors, as ee tends to be a very large value.
-    //T a =  4 * square(ee + ew) - 4 * (ee + 2 * ew + ww) * (ee - 1);
-    T a =  4 * (square(ew) - ee * ww + ee + 2 * ew + ww);
-    T b = -8 * (ee + ew);
-    T c =  4 * ee;
-
-    T t = 0;
-    T discriminant = b * b - 4 * a * c;
-
-    if (discriminant < 0)
-        t = (-b + (T) sqrt(-discriminant)) / (2 * a); // Bad!
-    else
-        t = (-b + (T) sqrt(discriminant)) / (2 * a);
-
-    // V is the direction vector.  We now need the point of intersection,
-    // which we obtain by solving the quadratic equation for the ray-ellipse
-    // intersection.  Since we already know that the discriminant is zero,
-    // the solution is just -b/2a
-    Matrix<T, 3, 1> v = -e * (1 - t) + w * t;
-    Matrix<T, 3, 1> v_ = v.cwiseProduct(recipSemiAxes);
-    T a1 = v_.dot(v_);
-    T b1 = (T) 2 * v_.dot(e_);
-    T t1 = -b1 / (2 * a1);
-
-    return e + v * t1;
-}
-
+constexpr const unsigned maxSections = 360;
 
 void
-VisibleRegion::render(Renderer* /* renderer */,
-                      const Vector3f& /* pos */,
+VisibleRegion::render(Renderer* renderer,
+                      const Vector3f& position,
                       float discSizeInPixels,
-                      double tdb) const
+                      double tdb,
+                      const Matrices& m) const
 {
+    // Proper terminator calculation requires double precision floats in GLSL
+    // which were introduced in ARB_gpu_shader_fp64 unavailable with GL2.1.
+    // Because of this we make calculations on a CPU and stream results to GPU.
+
     // Don't render anything if the current time is not within the
     // target object's time window.
     if (m_target.body() != nullptr)
@@ -157,7 +108,7 @@ VisibleRegion::render(Renderer* /* renderer */,
 
     // Base the amount of subdivision on the apparent size
     auto nSections = (unsigned int) (30.0f + discSizeInPixels * 0.5f);
-    nSections = min(nSections, 360u);
+    nSections = min(nSections, maxSections);
 
     Quaterniond q = m_body.getEclipticToBodyFixed(tdb);
     Quaternionf qf = q.cast<float>();
@@ -169,23 +120,6 @@ VisibleRegion::render(Renderer* /* renderer */,
     scale = max(scale, 1.0001f);
 
     Vector3f semiAxes = m_body.getSemiAxes();
-
-    // Enable depth buffering
-    glEnable(GL_DEPTH_TEST);
-    glDepthMask(GL_TRUE);
-    glEnable(GL_BLEND);
-#ifdef USE_HDR
-    glBlendFunc(GL_ONE_MINUS_SRC_ALPHA, GL_SRC_ALPHA);
-#else
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-#endif
-
-    glDisable(GL_TEXTURE_2D);
-    glDisable(GL_LIGHTING);
-
-    glPushMatrix();
-    glRotate(qf.conjugate());
-
     double maxSemiAxis = m_body.getRadius();
 
     // In order to avoid precision problems and extremely large values, scale
@@ -211,28 +145,32 @@ VisibleRegion::render(Renderer* /* renderer */,
     Vector3d e_ = e.cwiseProduct(recipSemiAxes);
     double ee = e_.squaredNorm();
 
-    glColor4f(m_color.red(), m_color.green(), m_color.blue(), opacity);
-    glBegin(GL_LINE_LOOP);
+    LineRenderer lr(*renderer, 1.0f, LineRenderer::PrimType::LineStrip);
+    lr.startUpdate();
 
-    for (unsigned i = 0; i < nSections; i++)
+    for (unsigned i = 0; i <= nSections + 1; i++)
     {
-        double theta = (double) i / (double) (nSections) * 2.0 * PI;
+        double theta = (double) i / (double) (nSections) * 2.0 * celestia::numbers::pi;
         Vector3d w = cos(theta) * uAxis + sin(theta) * vAxis;
 
-        Vector3d toCenter = ellipsoidTangent(recipSemiAxes, w, e, e_, ee);
+        Vector3d toCenter = math::ellipsoidTangent(recipSemiAxes, w, e, e_, ee);
         toCenter *= maxSemiAxis * scale;
-        glVertex3dv(toCenter.data());
+        lr.addVertex(Vector3f(toCenter.cast<float>()));
     }
 
-    glEnd();
+    Affine3f transform = Translation3f(position) * qf.conjugate();
+    Matrix4f modelView = (*m.modelview) * transform.matrix();
 
-    glPopMatrix();
+    Renderer::PipelineState ps;
+    ps.blending = true;
+    ps.blendFunc = {GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA};
+    ps.depthMask = true;
+    ps.depthTest = true;
+    ps.smoothLines = true;
+    renderer->setPipelineState(ps);
 
-    glDisable(GL_DEPTH_TEST);
-    glDepthMask(GL_FALSE);
-    glEnable(GL_TEXTURE_2D);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+    lr.render({ m.projection, &modelView }, Color(m_color, opacity), nSections+1, 0);
+    lr.finish();
 }
 
 

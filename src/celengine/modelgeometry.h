@@ -8,39 +8,23 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#ifndef _CELENGINE_MODEL_GEOMETRY_H_
-#define _CELENGINE_MODEL_GEOMETRY_H_
+#pragma once
 
-#include "geometry.h"
+#include <memory>
+
+#include <Eigen/Geometry>
+
 #include <celmodel/model.h>
-#include <celutil/resmanager.h>
+#include "geometry.h"
 
-
-class CelestiaTextureResource : public cmod::Material::TextureResource
-{
-public:
-    CelestiaTextureResource(ResourceHandle textureHandle) :
-        m_textureHandle(textureHandle)
-    {
-    }
-
-    ResourceHandle textureHandle() const
-    {
-        return m_textureHandle;
-    }
-
-    std::string source() const;
-
-private:
-    ResourceHandle m_textureHandle;
-};
 
 class ModelOpenGLData;
+class RenderContext;
 
 class ModelGeometry : public Geometry
 {
- public:
-    ModelGeometry(cmod::Model* model);
+public:
+    explicit ModelGeometry(std::unique_ptr<cmod::Model>&& model);
     ~ModelGeometry();
 
     /*! Find the closest intersection between the ray and the
@@ -48,21 +32,19 @@ class ModelGeometry : public Geometry
      *  and set distance; otherwise return false and leave
      *  distance unmodified.
      */
-    virtual bool pick(const Ray3d& r, double& distance) const;
+    bool pick(const Eigen::ParametrizedLine<double, 3>& r, double& distance) const override;
 
     //! Render the model in the current OpenGL context
-    virtual void render(RenderContext&, double t = 0.0);
+    void render(RenderContext&, double t = 0.0) override;
 
-    virtual bool usesTextureType(cmod::Material::TextureSemantic) const;
-    virtual bool isOpaque() const;
-    virtual bool isNormalized() const;
+    bool usesTextureType(cmod::TextureSemantic) const override;
+    bool isOpaque() const override;
+    bool isNormalized() const override;
 
-    void loadTextures();
+    void loadTextures() override;
 
- private:
-    cmod::Model* m_model;
+private:
+    std::unique_ptr<cmod::Model> m_model;
+    std::unique_ptr<ModelOpenGLData> m_glData;
     bool m_vbInitialized{ false };
-    ModelOpenGLData* m_glData{ nullptr };
 };
-
-#endif // !_CELENGINE_MODEL_H_

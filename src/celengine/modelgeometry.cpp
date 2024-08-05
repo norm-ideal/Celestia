@@ -8,67 +8,123 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
+#include <algorithm>
+#include <vector>
+#include <utility>
+#include <celrender/gl/buffer.h>
+#include <celrender/gl/vertexobject.h>
+#include <celutil/gettext.h>
+#include <celutil/logger.h>
+#include "glsupport.h"
 #include "modelgeometry.h"
 #include "rendcontext.h"
-#include "texmanager.h"
-#include <Eigen/Core>
-#include <functional>
-#include <algorithm>
-#include <cassert>
 
-using namespace cmod;
-using namespace Eigen;
-using namespace std;
+using celestia::util::GetLogger;
+namespace gl = celestia::gl;
+namespace util = celestia::util;
 
+namespace
+{
 
+constexpr gl::VertexObject::DataType GLComponentTypes[static_cast<std::size_t>(cmod::VertexAttributeFormat::FormatMax)] =
+{
+     gl::VertexObject::DataType::Float,         // Float1
+     gl::VertexObject::DataType::Float,         // Float2
+     gl::VertexObject::DataType::Float,         // Float3
+     gl::VertexObject::DataType::Float,         // Float4,
+     gl::VertexObject::DataType::UnsignedByte,  // UByte4
+};
 
-// Vertex buffer object support
+constexpr int GLComponentCounts[static_cast<std::size_t>(cmod::VertexAttributeFormat::FormatMax)] =
+{
+     1,  // Float1
+     2,  // Float2
+     3,  // Float3
+     4,  // Float4,
+     4,  // UByte4
+};
 
-// VBO optimization is only worthwhile for large enough vertex lists
-static const unsigned int MinVBOSize = 4096;
+constexpr bool GLComponentNormalized[static_cast<std::size_t>(cmod::VertexAttributeFormat::FormatMax)] =
+{
+     false,  // Float1
+     false,  // Float2
+     false,  // Float3
+     false,  // Float4,
+     true,  // UByte4
+};
+
+constexpr int
+convert(cmod::VertexAttributeSemantic semantic)
+{
+    switch (semantic)
+    {
+    case cmod::VertexAttributeSemantic::Position:
+        return CelestiaGLProgram::VertexCoordAttributeIndex;
+    case cmod::VertexAttributeSemantic::Normal:
+        return CelestiaGLProgram::NormalAttributeIndex;
+    case cmod::VertexAttributeSemantic::Color0:
+        return CelestiaGLProgram::ColorAttributeIndex;
+    case cmod::VertexAttributeSemantic::Texture0:
+        return CelestiaGLProgram::TextureCoord0AttributeIndex;
+    case cmod::VertexAttributeSemantic::Tangent:
+        return CelestiaGLProgram::TangentAttributeIndex;
+    case cmod::VertexAttributeSemantic::PointSize:
+        return CelestiaGLProgram::PointSizeAttributeIndex;
+    default:
+        return -1; // other attributes are not supported
+        break;
+    }
+}
+
+void
+setVertexArrays(gl::VertexObject &vao, const gl::Buffer &vbo, const cmod::VertexDescription& desc)
+{
+    for (const auto &attribute : desc.attributes)
+    {
+        if (attribute.semantic == cmod::VertexAttributeSemantic::InvalidSemantic)
+            continue;
+
+        vao.addVertexBuffer(
+            vbo,
+            convert(attribute.semantic),
+            GLComponentCounts[static_cast<std::size_t>(attribute.format)],
+            GLComponentTypes[static_cast<std::size_t>(attribute.format)],
+            GLComponentNormalized[static_cast<std::size_t>(attribute.format)],
+            desc.strideBytes,
+            attribute.offsetWords * sizeof(cmod::VWord));
+    }
+}
+
+} // anonymous namespace
 
 
 class ModelOpenGLData
 {
 public:
-    ModelOpenGLData() = default;
-
-    ~ModelOpenGLData()
-    {
-        for (auto vboId : vbos)
-        {
-            if (vboId != 0)
-            {
-                glDeleteBuffers(1, &vboId);
-            }
-        }
-    }
-
-    std::vector<GLuint> vbos; // vertex buffer objects
+    std::vector<gl::Buffer> vbos; // vertex buffer objects
+    std::vector<gl::Buffer> vios; // vertex index objects
+    std::vector<gl::VertexObject> vaos; // vertex attributes
 };
 
 
 /** Create a new ModelGeometry wrapping the specified model.
   * The ModelGeoemtry takes ownership of the model.
   */
-ModelGeometry::ModelGeometry(Model* model) :
-    m_model(model)
+ModelGeometry::ModelGeometry(std::unique_ptr<cmod::Model>&& model) :
+    m_model(std::move(model)),
+    m_glData(std::make_unique<ModelOpenGLData>())
 {
-    m_glData = new ModelOpenGLData();
 }
 
 
-ModelGeometry::~ModelGeometry()
-{
-    delete m_model;
-    delete m_glData;
-}
+// Needs to be defined at a point where ModelOpenGLData is complete
+ModelGeometry::~ModelGeometry() = default;
 
 
 bool
-ModelGeometry::pick(const Ray3d& r, double& distance) const
+ModelGeometry::pick(const Eigen::ParametrizedLine<double, 3>& r, double& distance) const
 {
-    return m_model->pick(r.origin, r.direction, distance);
+    return m_model->pick(r.origin(), r.direction(), distance);
 }
 
 
@@ -89,27 +145,31 @@ ModelGeometry::render(RenderContext& rc, double /* t */)
     {
         m_vbInitialized = true;
 
+        std::vector<cmod::Index32> indices;
         for (unsigned int i = 0; i < m_model->getMeshCount(); ++i)
         {
-            Mesh* mesh = m_model->getMesh(i);
-            const Mesh::VertexDescription& vertexDesc = mesh->getVertexDescription();
+            const cmod::Mesh* mesh = m_model->getMesh(i);
+            const cmod::VertexDescription& vertexDesc = mesh->getVertexDescription();
 
-            GLuint vboId = 0;
-            if (mesh->getVertexCount() * vertexDesc.stride > MinVBOSize)
+            m_glData->vbos.emplace_back(
+                gl::Buffer::TargetHint::Array,
+                util::array_view<const void>(
+                    mesh->getVertexData(),
+                    mesh->getVertexCount() * vertexDesc.strideBytes));
+
+            indices.reserve(std::max(indices.capacity(), static_cast<std::size_t>(mesh->getIndexCount())));
+            for (unsigned int groupIndex = 0; groupIndex < mesh->getGroupCount(); ++groupIndex)
             {
-                glGenBuffers(1, &vboId);
-                if (vboId != 0)
-                {
-                    glBindBuffer(GL_ARRAY_BUFFER, vboId);
-                    glBufferData(GL_ARRAY_BUFFER,
-                                    mesh->getVertexCount() * vertexDesc.stride,
-                                    mesh->getVertexData(),
-                                    GL_STATIC_DRAW);
-                    glBindBuffer(GL_ARRAY_BUFFER, 0);
-                }
+                const auto* group = mesh->getGroup(groupIndex);
+                std::copy(group->indices.begin(), group->indices.end(), std::back_inserter(indices));
             }
+            m_glData->vios.emplace_back(gl::Buffer::TargetHint::ElementArray, indices);
+            indices.clear();
 
-            m_glData->vbos.push_back(vboId);
+            gl::VertexObject vao;
+            setVertexArrays(vao, m_glData->vbos.back(), mesh->getVertexDescription());
+            vao.setIndexBuffer(m_glData->vios.back(), 0, gl::VertexObject::IndexType::UnsignedInt);
+            m_glData->vaos.emplace_back(std::move(vao));
         }
     }
 
@@ -119,33 +179,22 @@ ModelGeometry::render(RenderContext& rc, double /* t */)
     // Iterate over all meshes in the model
     for (unsigned int meshIndex = 0; meshIndex < m_model->getMeshCount(); ++meshIndex)
     {
-        Mesh* mesh = m_model->getMesh(meshIndex);
-        GLuint vboId = 0;
+        const cmod::Mesh* mesh = m_model->getMesh(meshIndex);
 
-        if (meshIndex < m_glData->vbos.size())
+        if (meshIndex >= m_glData->vbos.size())
         {
-            vboId = m_glData->vbos[meshIndex];
-        }
-
-        if (vboId != 0)
-        {
-            // Bind the vertex buffer object.
-            glBindBuffer(GL_ARRAY_BUFFER, vboId);
-            rc.setVertexArrays(mesh->getVertexDescription(), nullptr);
-        }
-        else
-        {
-            // No vertex buffer object; just use normal vertex arrays
-            rc.setVertexArrays(mesh->getVertexDescription(), mesh->getVertexData());
+            GetLogger()->error(_("Mesh index {} is higher than VBO count {}!"), meshIndex, m_glData->vbos.size());
+            return;
         }
 
         // Iterate over all primitive groups in the mesh
         for (unsigned int groupIndex = 0; groupIndex < mesh->getGroupCount(); ++groupIndex)
         {
-            const Mesh::PrimitiveGroup* group = mesh->getGroup(groupIndex);
+            const cmod::PrimitiveGroup* group = mesh->getGroup(groupIndex);
+            rc.updateShader(mesh->getVertexDescription(), group->prim);
 
             // Set up the material
-            const Material* material = nullptr;
+            const cmod::Material* material = nullptr;
             unsigned int materialIndex = group->materialIndex;
             if (materialIndex != lastMaterial && materialIndex < materialCount)
             {
@@ -153,13 +202,7 @@ ModelGeometry::render(RenderContext& rc, double /* t */)
             }
 
             rc.setMaterial(material);
-            rc.drawGroup(*group);
-        }
-
-        // If we set a VBO, unbind it.
-        if (vboId != 0)
-        {
-            glBindBuffer(GL_ARRAY_BUFFER, 0);
+            rc.drawGroup(m_glData->vaos[meshIndex], *group);
         }
     }
 }
@@ -180,7 +223,7 @@ ModelGeometry::isNormalized() const
 
 
 bool
-ModelGeometry::usesTextureType(Material::TextureSemantic t) const
+ModelGeometry::usesTextureType(cmod::TextureSemantic t) const
 {
     return m_model->usesTextureType(t);
 }
@@ -202,15 +245,4 @@ ModelGeometry::loadTextures()
             GetTextureManager()->find(m->maps[Mesh::EmissiveMap]);
     }
 #endif
-}
-
-
-string
-CelestiaTextureResource::source() const
-{
-    if (m_textureHandle == InvalidResource)
-        return "";
-
-    const TextureInfo* t = GetTextureManager()->getResourceInfo(textureHandle());
-    return t ? t->source : "";
 }

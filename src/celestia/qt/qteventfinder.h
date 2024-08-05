@@ -10,48 +10,39 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#ifndef _QTEVENTFINDER_H_
-#define _QTEVENTFINDER_H_
+#pragma once
 
 #include <QDockWidget>
-#include <QTime>
+#include <QElapsedTimer>
 
-class QTreeView;
-class QRadioButton;
-class QDateEdit;
+#include <celestia/eclipsefinder.h>
+
 class QComboBox;
-class QProgressDialog;
+class QDateEdit;
 class QMenu;
-class EventTableModel;
+class QPoint;
+class QProgressDialog;
+class QRadioButton;
+class QString;
+class QTreeView;
+class QWidget;
+
 class CelestiaCore;
-class EclipseRecord;
 
-class EclipseFinderWatcher
+namespace celestia::qt
 {
-public:
-    virtual ~EclipseFinderWatcher() = default;
-
-    enum Status
-    {
-        ContinueOperation = 0,
-        AbortOperation = 1,
-    };
-
-    virtual Status eclipseFinderProgressUpdate(double t) = 0;
-};
-
 
 class EventFinder : public QDockWidget, EclipseFinderWatcher
 {
     Q_OBJECT
 
- public:
+public:
     EventFinder(CelestiaCore* _appCore, const QString& title, QWidget* parent);
     ~EventFinder() = default;
 
     EclipseFinderWatcher::Status eclipseFinderProgressUpdate(double t);
 
- public slots:
+public slots:
     void slotFindEclipses();
     void slotContextMenu(const QPoint&);
 
@@ -61,7 +52,9 @@ class EventFinder : public QDockWidget, EclipseFinderWatcher
     void slotViewOccluderSurface();
     void slotViewBehindOccluder();
 
- private:
+private:
+    class EventTableModel;
+
     CelestiaCore* appCore;
 
     QRadioButton* solarOnlyButton{ nullptr };
@@ -81,9 +74,9 @@ class EventFinder : public QDockWidget, EclipseFinderWatcher
     double searchSpan{ 0.0 };
     double lastProgressUpdate{ 0.0 };
 
-    QTime searchTimer;
+    QElapsedTimer searchTimer;
 
-    const EclipseRecord* activeEclipse{ nullptr };
+    const Eclipse* activeEclipse{ nullptr };
 };
 
-#endif // _QTEVENTFINDER_H_
+} // end namespace celestia::qt

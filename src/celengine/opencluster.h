@@ -7,8 +7,9 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#ifndef CELENGINE_OPENCLUSTER_H_
-#define CELENGINE_OPENCLUSTER_H_
+#pragma once
+
+#include <Eigen/Geometry>
 
 #include <celutil/reshandle.h>
 #include <celengine/deepskyobj.h>
@@ -17,31 +18,25 @@
 class OpenCluster : public DeepSkyObject
 {
  public:
-    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-
     OpenCluster() = default;
 
-    virtual const char* getType() const;
-    virtual void setType(const std::string&);
-    virtual std::string getDescription() const;
+    const char* getType() const override;
+    void setType(const std::string&) override;
+    std::string getDescription() const override;
 
-    virtual bool pick(const Ray3d& ray,
-                      double& distanceToPicker,
-                      double& cosAngleToBoundCenter) const;
-    virtual bool load(AssociativeArray*, const std::string&);
-    virtual void render(const Eigen::Vector3f& offset,
-                        const Eigen::Quaternionf& viewerOrientation,
-                        float brightness,
-                        float pixelSize,
-                        const Renderer* r = nullptr);
+    bool pick(const Eigen::ParametrizedLine<double, 3>& ray,
+              double& distanceToPicker,
+              double& cosAngleToBoundCenter) const override;
+    bool load(const AssociativeArray*, const fs::path&) override;
 
-    virtual unsigned int getRenderMask() const;
-    virtual unsigned int getLabelMask() const;
+    uint64_t getRenderMask() const override;
+    unsigned int getLabelMask() const override;
 
-    virtual const char* getObjTypeName() const;
+    DeepSkyObjectType getObjType() const override;
 
  public:
-    enum ClusterType {
+    enum ClusterType
+    {
         Open          = 0,
         Globular      = 1,
         NotDefined    = 2
@@ -51,5 +46,3 @@ class OpenCluster : public DeepSkyObject
     // TODO: It could be very useful to have a list of stars that are members
     // of the cluster.
 };
-
-#endif // CELENGINE_OPENCLUSTER_H_

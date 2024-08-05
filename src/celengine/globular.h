@@ -12,82 +12,65 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#ifndef _GLOBULAR_H_
-#define _GLOBULAR_H_
+#pragma once
 
+#include <cstdint>
+#include <string>
+
+#include <Eigen/Core>
 #include <Eigen/Geometry>
-#include <celengine/deepskyobj.h>
 
+#include <celcompat/filesystem.h>
+#include "deepskyobj.h"
 
-struct GBlob
-{
-    Eigen::Vector3f position;
-    unsigned int   colorIndex;
-    float          radius_2d;
-};
+struct Matrices;
+class Renderer;
 
-struct GlobularForm
-{
-    std::vector<GBlob>* gblobs;
-    Eigen::Vector3f scale;
-};
 
 class Globular : public DeepSkyObject
 {
- public:
-    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+public:
+
+   // min/max c-values of globular cluster data
+   static constexpr float MinC = 0.50f;
+   static constexpr float MaxC = 2.58f;
+   static constexpr int GlobularBuckets = 8;
+   static constexpr float BinWidth = (MaxC - MinC) / static_cast<float>(GlobularBuckets) + 0.02f;
 
     Globular();
-    virtual const char* getType() const;
-    virtual void setType(const std::string&);
-    virtual std::string getDescription() const;
-    virtual std::string getCustomTmpName() const;
-    virtual void setCustomTmpName(const std::string&);
+
+    const char* getType() const override;
+    void setType(const std::string&) override;
+    std::string getDescription() const override;
+    float getHalfMassRadius() const override;
+
     float getDetail() const;
-    void  setDetail(float);
-    float getCoreRadius() const;
-    void  setCoreRadius(const float);
-    void  setConcentration(const float);
-    float getConcentration() const;
-    float getHalfMassRadius() const;
-    unsigned int cSlot(float) const;
+    void setDetail(float);
 
-    virtual float getBoundingSphereRadius() const { return tidalRadius; }
+    float getBoundingSphereRadius() const override { return tidalRadius; }
 
-    virtual bool pick(const Ray3d& ray,
-                      double& distanceToPicker,
-                      double& cosAngleToBoundCenter) const;
-    virtual bool load(AssociativeArray*, const std::string&);
-    virtual void render(const Eigen::Vector3f& offset,
-                        const Eigen::Quaternionf& viewerOrientation,
-                        float brightness,
-                        float pixelSize,
-                        const Renderer* r = nullptr);
-    virtual void renderGlobularPointSprites(const Eigen::Vector3f& offset,
-                                            const Eigen::Quaternionf& viewerOrientation,
-                                            float brightness,
-                                            float pixelSize);
-    GlobularForm* getForm() const;
+    bool pick(const Eigen::ParametrizedLine<double, 3>& ray,
+              double& distanceToPicker,
+              double& cosAngleToBoundCenter) const override;
+    bool load(const AssociativeArray*, const fs::path&) override;
 
-    virtual unsigned int getRenderMask() const;
-    virtual unsigned int getLabelMask() const;
-    virtual const char* getObjTypeName() const;
+    std::uint64_t getRenderMask() const override;
+    unsigned int getLabelMask() const override;
+    DeepSkyObjectType getObjType() const override;
 
- private:
-   // Reference values ( = data base averages) of core radius, King concentration
-   // and mu25 isophote radius:
+    int getFormId() const;
 
-    static constexpr float R_c_ref = 0.83f, C_ref = 2.1f, R_mu25 = 40.32f;
+private:
+    // Reference values ( = data base averages) of core radius, King concentration
+    static constexpr float R_c_ref = 0.83f;
+    static constexpr float C_ref = 2.1f;
+    // mu25 isophote radius is not used: R_mu25 = 40.32f
 
     void recomputeTidalRadius();
 
- private:
     float detail{ 1.0f };
-    std::string* customTmpName{ nullptr };
-    GlobularForm* form{ nullptr };
     float r_c{ R_c_ref };
     float c{ C_ref };
     float tidalRadius{ 0.0f };
+    int formIndex{ -1 };
 };
-
-#endif // _GLOBULAR_H_

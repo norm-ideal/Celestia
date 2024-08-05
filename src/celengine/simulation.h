@@ -7,19 +7,25 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#ifndef _CELENGINE_SIMULATION_H_
-#define _CELENGINE_SIMULATION_H_
+#pragma once
+
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include <Eigen/Core>
+#include <Eigen/Geometry>
 
 #include <celengine/texture.h>
 #include <celengine/universe.h>
-#include <celengine/astro.h>
 #include <celengine/galaxy.h>
 #include <celengine/globular.h>
 #include <celengine/texmanager.h>
 #include <celengine/frame.h>
 #include <celengine/observer.h>
-#include <Eigen/Core>
-#include <vector>
 
 
 class Renderer;
@@ -38,18 +44,19 @@ class Simulation
 
     void update(double dt);
     void render(Renderer&);
-    void draw(Renderer&);
     void render(Renderer&, Observer&);
 
-    Selection pickObject(const Eigen::Vector3f& pickRay, uint64_t renderFlags, float tolerance = 0.0f);
+    Selection pickObject(const Eigen::Vector3f& pickRay, std::uint64_t renderFlags, float tolerance = 0.0f);
 
     Universe* getUniverse() const;
 
+    bool orbit(const Eigen::Vector3f& from, const Eigen::Vector3f& to);
     void orbit(const Eigen::Quaternionf& q);
     void rotate(const Eigen::Quaternionf& q);
     void changeOrbitDistance(float d);
+    void scaleOrbitDistance(float scale, const std::optional<Eigen::Vector3f>& focus);
     void setTargetSpeed(float s);
-    float getTargetSpeed();
+    float getTargetSpeed() const;
 
     Selection getSelection() const;
     void setSelection(const Selection&);
@@ -57,9 +64,11 @@ class Simulation
     void setTrackedObject(const Selection&);
 
     void selectPlanet(int);
-    Selection findObject(std::string s, bool i18n = false);
-    Selection findObjectFromPath(std::string s, bool i18n = false);
-    std::vector<std::string> getObjectCompletion(std::string s, bool withLocations = false);
+    Selection findObject(std::string_view s, bool i18n = false) const;
+    Selection findObjectFromPath(std::string_view s, bool i18n = false) const;
+    void getObjectCompletion(std::vector<std::string>& completion,
+                             std::string_view s,
+                             bool withLocations = false) const;
     void gotoSelection(double gotoTime,
                        const Eigen::Vector3f& up,
                        ObserverFrame::CoordinateSystem upFrame);
@@ -86,13 +95,15 @@ class Simulation
     void cancelMotion();
 
     Observer& getObserver();
+    const Observer& getObserver() const;
     void setObserverPosition(const UniversalCoord&);
     void setObserverOrientation(const Eigen::Quaternionf&);
     void reverseObserverOrientation();
 
-    Observer* addObserver();
+    Observer* duplicateActiveObserver();
     void removeObserver(Observer*);
     Observer* getActiveObserver();
+    const Observer* getActiveObserver() const;
     void setActiveObserver(Observer*);
 
     SolarSystem* getNearestSolarSystem() const;
@@ -113,10 +124,7 @@ class Simulation
 
     void setFrame(ObserverFrame::CoordinateSystem, const Selection& refObject, const Selection& targetObject);
     void setFrame(ObserverFrame::CoordinateSystem, const Selection& refObject);
-    const ObserverFrame* getFrame() const;
-
- private:
-    SolarSystem* getSolarSystem(const Star* star);
+    const ObserverFrame::SharedConstPtr& getFrame() const;
 
  private:
     double realTime{ 0.0 };
@@ -126,7 +134,7 @@ class Simulation
 
     Universe* universe;
 
-    SolarSystem* closestSolarSystem{ nullptr };
+    mutable std::optional<SolarSystem*> closestSolarSystem{ std::nullopt };
     Selection selection;
 
     Observer* activeObserver;
@@ -135,5 +143,3 @@ class Simulation
     float faintestVisible{ 5.0f };
     bool pauseState{ false };
 };
-
-#endif // _CELENGINE_SIMULATION_H_

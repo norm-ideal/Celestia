@@ -10,24 +10,23 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#ifndef _CELENGINE_FRAMETREE_H_
-#define _CELENGINE_FRAMETREE_H_
+#pragma once
 
+#include <memory>
 #include <vector>
 #include <cstddef>
+#include "body.h"
+#include "frame.h"
+#include "timelinephase.h"
 
 class Star;
-class Body;
-class ReferenceFrame;
-class TimelinePhase;
-
 
 class FrameTree
 {
 public:
-    FrameTree(Star*);
-    FrameTree(Body*);
-    ~FrameTree();
+    explicit FrameTree(Star*);
+    explicit FrameTree(Body*);
+    ~FrameTree() = default;
 
     /*! Return the star that this tree is associated with; it will be
      *  nullptr for frame trees associated with solar system bodies.
@@ -37,11 +36,11 @@ public:
         return starParent;
     }
 
-    ReferenceFrame* getDefaultReferenceFrame() const;
+    const ReferenceFrame::SharedConstPtr &getDefaultReferenceFrame() const;
 
-    void addChild(TimelinePhase* phase);
-    void removeChild(TimelinePhase* phase);
-    TimelinePhase* getChild(unsigned int n) const;
+    void addChild(const TimelinePhase::SharedConstPtr &phase);
+    void removeChild(const TimelinePhase::SharedConstPtr &phase);
+    const TimelinePhase* getChild(unsigned int n) const;
     unsigned int childCount() const;
 
     void markChanged();
@@ -84,7 +83,7 @@ public:
     /*! Return a bitmask with the classifications of all children
      *  in this tree.
      */
-    int childClassMask() const
+    BodyClassification childClassMask() const
     {
         return m_childClassMask;
     }
@@ -92,15 +91,13 @@ public:
 private:
     Star* starParent;
     Body* bodyParent;
-    std::vector<TimelinePhase*> children;
+    std::vector<TimelinePhase::SharedConstPtr> children;
 
     double m_boundingSphereRadius{ 0.0 };
     double m_maxChildRadius{ 0.0 };
     bool m_containsSecondaryIlluminators{ false };
     bool m_changed{ false };
-    int m_childClassMask{ 0 };
+    BodyClassification m_childClassMask{ BodyClassification::EmptyMask };
 
-    ReferenceFrame* defaultFrame;
+    ReferenceFrame::SharedConstPtr defaultFrame;
 };
-
-#endif // _CELENGINE_FRAMETREE_H_

@@ -1,49 +1,66 @@
 set(CELUTIL_SOURCES
-  bigfix.cpp
-  bigfix.h
+  binaryread.h
+  binarywrite.h
+  blockarray.h
   bytes.h
   color.cpp
   color.h
-  debug.cpp
-  debug.h
-  directory.cpp
-  directory.h
+  dateformatter.cpp
+  dateformatter.h
   filetype.cpp
   filetype.h
+  flag.h
   formatnum.cpp
   formatnum.h
-  #memorypool.cpp
-  #memorypool.h
+  fsutils.cpp
+  fsutils.h
+  greek.cpp
+  greek.h
+  includeicu.h
+  localeutil.h
+  logger.cpp
+  logger.h
+  ranges.h
+  r128.h
+  r128util.cpp
+  r128util.h
   reshandle.h
   resmanager.h
+  stringutils.cpp
+  stringutils.h
+  strnatcmp.cpp
+  strnatcmp.h
   timer.cpp
   timer.h
+  tokenizer.cpp
+  tokenizer.h
+  tzutil.cpp
+  tzutil.h
+  uniquedel.h
   utf8.cpp
   utf8.h
-  util.cpp
-  util.h
   watcher.h
 )
 
-if (WIN32)
+if (USE_ICU)
   list(APPEND CELUTIL_SOURCES
-    windirectory.cpp
-    winutil.cpp
-    winutil.h
-  )
-else()
-  list(APPEND CELUTIL_SOURCES
-    unixdirectory.cpp
+    unicode.cpp
+    unicode.h
   )
 endif()
 
-add_library(celutil STATIC ${CELUTIL_SOURCES})
-cotire(celutil)
-#[[
-add_library(celutil SHARED ${CELUTIL_SOURCES})
-set_target_properties(celutil PROPERTIES
-  VERSION ${VERSION}
-  SOVERSION ${VERSION}
-)
-]]#
-#install(TARGETS celutil LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
+if (WIN32)
+  list(APPEND CELUTIL_SOURCES
+    winutil.cpp
+    winutil.h
+  )
+endif()
+
+if (APPLE)
+  list(APPEND CELUTIL_SOURCES
+    appleutils.h
+    appleutils.mm
+  )
+endif()
+
+add_library(celutil OBJECT ${CELUTIL_SOURCES})

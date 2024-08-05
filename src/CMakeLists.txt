@@ -1,19 +1,24 @@
 set(CELESTIA_LIBS
   cel3ds
+  celastro
+  celcompat
   celengine
   celephem
   celestia
+  celimage
   celmath
   celmodel
-  celtxf
+  celrender
+  celttf
   celutil
 )
 
-foreach(lib ${CELESTIA_LIBS} tools)
+foreach(lib ${CELESTIA_LIBS})
   add_subdirectory(${lib})
 endforeach()
 
-if (NOT WIN32)
-  add_executable(buildstardb buildstardb.cpp)
-  cotire(buildstardb)
+add_subdirectory(celscript)
+
+if (ENABLE_TOOLS)
+  add_subdirectory(tools)
 endif()

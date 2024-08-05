@@ -22,15 +22,20 @@ macro(build_cmod_tool)
   include_directories("../common")
 
   add_executable(${__target} ${__win32} ${__sources})
-  target_link_libraries(${__target} celmodel cel3ds cmodcommon)
-  add_dependencies(${__target} celmodel cel3ds cmodcommon)
+  target_link_libraries(${__target} celestia cmodcommon)
+  add_dependencies(${__target} celestia cmodcommon)
 
-  install(TARGETS ${__target} RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+  install(
+    TARGETS ${__target}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    COMPONENT tools
+  )
 endmacro()
 
 add_subdirectory(common)
 add_subdirectory(3dstocmod)
 add_subdirectory(cmodfix)
 add_subdirectory(cmodsphere)
-add_subdirectory(cmodview)
+add_subdirectory(cmodview-qt5)
+add_subdirectory(cmodview-qt6)
 add_subdirectory(itokawa)

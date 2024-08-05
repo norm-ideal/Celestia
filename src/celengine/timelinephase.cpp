@@ -10,22 +10,26 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#include "celengine/timelinephase.h"
-#include "celengine/frame.h"
-#include "celengine/universe.h"
-#include "celengine/frametree.h"
-#include "celephem/orbit.h"
-#include "celephem/rotation.h"
+#include "timelinephase.h"
+
 #include <cassert>
 
+#include <celephem/orbit.h>
+#include <celephem/rotation.h>
+#include "body.h"
+#include "frame.h"
+#include "frametree.h"
+#include "universe.h"
 
-TimelinePhase::TimelinePhase(Body* _body,
+
+TimelinePhase::TimelinePhase(CreateToken,
+                             Body* _body,
                              double _startTime,
                              double _endTime,
-                             ReferenceFrame* _orbitFrame,
-                             Orbit* _orbit,
-                             ReferenceFrame* _bodyFrame,
-                             RotationModel* _rotationModel,
+                             const ReferenceFrame::SharedConstPtr& _orbitFrame,
+                             const std::shared_ptr<const celestia::ephem::Orbit>& _orbit,
+                             const ReferenceFrame::SharedConstPtr& _bodyFrame,
+                             const std::shared_ptr<const celestia::ephem::RotationModel>& _rotationModel,
                              FrameTree* _owner) :
     m_body(_body),
     m_startTime(_startTime),
@@ -34,68 +38,22 @@ TimelinePhase::TimelinePhase(Body* _body,
     m_orbit(_orbit),
     m_bodyFrame(_bodyFrame),
     m_rotationModel(_rotationModel),
-    m_owner(_owner),
-    refCount(0)
+    m_owner(_owner)
 {
     // assert(owner == orbitFrame->getCenter()->getFrameTree());
-    m_orbitFrame->addRef();
-    m_bodyFrame->addRef();
 }
-
-
-TimelinePhase::~TimelinePhase()
-{
-    m_orbitFrame->release();
-    m_bodyFrame->release();
-}
-
-
-// Declared private--should never be used
-TimelinePhase::TimelinePhase(const TimelinePhase&)
-{
-    assert(0);
-}
-
-
-// Declared private--should never be used
-TimelinePhase& TimelinePhase::operator=(const TimelinePhase&)
-{
-    assert(0);
-    return *this;
-}
-
-
-int TimelinePhase::addRef() const
-{
-    return ++refCount;
-}
-
-
-int TimelinePhase::release() const
-{
-    --refCount;
-    assert(refCount >= 0);
-    if (refCount <= 0)
-    {
-        delete this;
-        return 0;
-    }
-
-    return refCount;
-}
-
 
 /*! Create a new timeline phase in the specified universe.
  */
-TimelinePhase*
+TimelinePhase::SharedConstPtr
 TimelinePhase::CreateTimelinePhase(Universe& universe,
                                    Body* body,
                                    double startTime,
                                    double endTime,
-                                   ReferenceFrame& orbitFrame,
-                                   Orbit& orbit,
-                                   ReferenceFrame& bodyFrame,
-                                   RotationModel& rotationModel)
+                                   const ReferenceFrame::SharedConstPtr& orbitFrame,
+                                   const std::shared_ptr<const celestia::ephem::Orbit>& orbit,
+                                   const ReferenceFrame::SharedConstPtr& bodyFrame,
+                                   const std::shared_ptr<const celestia::ephem::RotationModel>& rotationModel)
 {
     // Validate the time range.
     if (endTime <= startTime)
@@ -104,20 +62,14 @@ TimelinePhase::CreateTimelinePhase(Universe& universe,
     // Get the frame tree to add the new phase to. Verify that the reference frame
     // center is either a star or solar system body.
     FrameTree* frameTree = nullptr;
-    Selection center = orbitFrame.getCenter();
+    Selection center = orbitFrame->getCenter();
     if (center.body() != nullptr)
     {
         frameTree = center.body()->getOrCreateFrameTree();
     }
     else if (center.star() != nullptr)
     {
-        SolarSystem* solarSystem = universe.getSolarSystem(center.star());
-        if (solarSystem == nullptr)
-        {
-            // No solar system defined for this star yet, so we need
-            // to create it.
-            solarSystem = universe.createSolarSystem(center.star());
-        }
+        const SolarSystem* solarSystem = universe.getOrCreateSolarSystem(center.star());
         frameTree = solarSystem->getFrameTree();
     }
     else
@@ -126,14 +78,15 @@ TimelinePhase::CreateTimelinePhase(Universe& universe,
         return nullptr;
     }
 
-    TimelinePhase* phase = new TimelinePhase(body,
-                                             startTime,
-                                             endTime,
-                                             &orbitFrame,
-                                             &orbit,
-                                             &bodyFrame,
-                                             &rotationModel,
-                                             frameTree);
+    auto phase = std::make_shared<TimelinePhase>(CreateToken(),
+                                                 body,
+                                                 startTime,
+                                                 endTime,
+                                                 orbitFrame,
+                                                 orbit,
+                                                 bodyFrame,
+                                                 rotationModel,
+                                                 frameTree);
 
     frameTree->addChild(phase);
 

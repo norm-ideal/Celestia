@@ -13,19 +13,20 @@
 #include <iostream>
 #include <fstream>
 #include <iomanip>
+#include <celastro/astro.h>
+#include <celcompat/numbers.h>
 #include <celutil/bytes.h>
-#include <celengine/astro.h>
 #include <celengine/stellarclass.h>
 
 using namespace std;
 
+namespace astro = celestia::astro;
 
 static string inputFilename;
 static string outputFilename;
 static string hdFilename;
 static bool useOldFormat = false;
 static bool useSphericalCoords = false;
-
 
 void Usage()
 {
@@ -110,13 +111,13 @@ void printStellarClass(uint16_t sc, ostream& out)
             switch (luminosityClass)
             {
             case StellarClass::Lum_Ia0:
-                out << "I-a0";
+                out << "Ia-0";
                 break;
             case StellarClass::Lum_Ia:
-                out << "I-a";
+                out << "Ia";
                 break;
             case StellarClass::Lum_Ib:
-                out << "I-b";
+                out << "Ib";
                 break;
             case StellarClass::Lum_II:
                 out << "II";
@@ -143,7 +144,7 @@ void printStellarClass(uint16_t sc, ostream& out)
 }
 
 
-bool DumpOldStarDatabase(istream& in, ostream& out, ostream* hdOut,
+bool DumpOldStarDatabase(istream& in, ostream& out, ofstream& hdOut,
                          bool spherical)
 {
     uint32_t nStarsInFile = readUint(in);
@@ -170,10 +171,10 @@ bool DumpOldStarDatabase(istream& in, ostream& out, ostream* hdOut,
         float  parallax      = readFloat(in);
         int16_t  appMag        = readShort(in);
         uint16_t stellarClass  = readUshort(in);
-        uint8_t  parallaxError = readUbyte(in);
+        /*uint8_t  parallaxError = */readUbyte(in); // not used yet
 
         // Compute distance based on parallax
-        double distance = LY_PER_PARSEC / (parallax > 0.0 ? parallax / 1000.0 : 1e-6);
+        double distance = astro::LY_PER_PARSEC<double> / (parallax > 0.0 ? parallax / 1000.0 : 1e-6);
         out << catalogNum << ' ';
         out << setprecision(8);
 
@@ -187,7 +188,7 @@ bool DumpOldStarDatabase(istream& in, ostream& out, ostream* hdOut,
         {
             Eigen::Vector3d pos = astro::equatorialToCelestialCart((double) RA, (double) dec, distance);
             float absMag = (float) (appMag / 256.0 + 5 -
-                                    5 * log10(distance / 3.26));
+                                    5 * log10(distance / astro::LY_PER_PARSEC<double>));
             out << (float) pos.x() << ' ' <<
                    (float) pos.y() << ' ' <<
                    (float) pos.z() << ' ';
@@ -198,15 +199,15 @@ bool DumpOldStarDatabase(istream& in, ostream& out, ostream* hdOut,
         out << '\n';
 
         // Dump HD catalog cross reference
-        if (hdOut != nullptr && HDCatalogNum != ~0)
-            *hdOut << HDCatalogNum << ' ' << catalogNum << '\n';
+        if (hdOut.is_open() && HDCatalogNum != ~0u)
+            hdOut << HDCatalogNum << ' ' << catalogNum << '\n';
     }
 
     return true;
 }
 
 
-bool DumpStarDatabase(istream& in, ostream& out, ostream* hdOut)
+bool DumpStarDatabase(istream& in, ostream& out, bool spherical)
 {
     char header[8];
     in.read(header, sizeof header);
@@ -250,9 +251,32 @@ bool DumpStarDatabase(istream& in, ostream& out, ostream* hdOut)
 
         out << catalogNum << ' ';
         out << setprecision(7);
-        out << x << ' ' << y << ' ' << z << ' ';
-        out << setprecision(4);
-        out << ((float) absMag / 256.0f) << ' ';
+
+        if (spherical)
+        {
+            Eigen::Vector3d eclipticpos = {(double) x, (double) y, (double) z};
+            Eigen::Vector3d pos = astro::eclipticToEquatorial(eclipticpos);
+            double distance = sqrt(x * x + y * y + z * z);
+            // acos outputs angles in interval [0, pi], use negative sign for interval [-pi, 0]
+            double phi = -acos(pos.y() / distance) * 180 / celestia::numbers::pi;
+            double theta = atan2(pos.z(), -pos.x()) * 180 / celestia::numbers::pi;
+            // atan2 outputs angles in interval [-pi, pi], so we add 360 to fix this
+            double ra = theta - 180 + 360;
+            double dec = phi + 90;
+            float appMag = float (absMag / 256.0 - 5 + 5 * log10(distance / astro::LY_PER_PARSEC<double>));
+
+            out << fixed << setprecision(9) << (float) ra << ' ' << (float) dec << ' ';
+            out << setprecision(6) << (float) distance << ' ';
+            out << setprecision(2);
+            out << appMag << ' ';
+        }
+        else
+        {
+            out << x << ' ' << y << ' ' << z << ' ';
+            out << setprecision(4);
+            out << ((float) absMag / 256.0f) << ' ';
+        }
+
         printStellarClass(stellarClass, out);
         out << '\n';
     }
@@ -339,11 +363,11 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    ofstream* hdOut = nullptr;
-    if (!hdFilename.empty())
+    ofstream hdOut;
+    if (useOldFormat && !hdFilename.empty())
     {
-        hdOut = new ofstream(hdFilename, ios::out);
-        if (!hdOut->good())
+        hdOut.open(hdFilename, ios::out);
+        if (!hdOut.good())
         {
             cerr << "Error opening HD catalog output file " << hdFilename << '\n';
             return 1;
@@ -352,14 +376,16 @@ int main(int argc, char* argv[])
 
     bool success;
     ostream* out = &cout;
+    ofstream fout;
     if (!outputFilename.empty())
     {
-        out = new ofstream(outputFilename, ios::out);
-        if (!out->good())
+        fout.open(outputFilename, ios::out);
+        if (!fout.good())
         {
             cerr << "Error opening output file " << outputFilename << '\n';
             return 1;
         }
+	out = &fout;
     }
 
     if (useOldFormat)
@@ -369,7 +395,7 @@ int main(int argc, char* argv[])
     }
     else
     {
-        success = DumpStarDatabase(stardbFile, *out, hdOut);
+        success = DumpStarDatabase(stardbFile, *out, useSphericalCoords);
     }
 
     return success ? 0 : 1;

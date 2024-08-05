@@ -1,6 +1,6 @@
 // stardb.h
 //
-// Copyright (C) 2001-2009, the Celestia Development Team
+// Copyright (C) 2001-2024, the Celestia Development Team
 // Original version by Chris Laurel <claurel@gmail.com>
 //
 // This program is free software; you can redistribute it and/or
@@ -8,214 +8,86 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#ifndef _CELENGINE_STARDB_H_
-#define _CELENGINE_STARDB_H_
+#pragma once
 
-#include <iostream>
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <string_view>
 #include <vector>
-#include <map>
-#include <celengine/constellation.h>
-#include <celengine/starname.h>
-#include <celengine/star.h>
-#include <celengine/staroctree.h>
-#include <celengine/parseobject.h>
 
+#include <Eigen/Core>
+#include <Eigen/Geometry>
 
-static const unsigned int MAX_STAR_NAMES = 10;
+#include "astroobj.h"
+#include "starname.h"
+#include "staroctree.h"
 
-// TODO: Move BlockArray to celutil; consider making it a full STL
-// style container with iterator support.
-
-/*! BlockArray is a container class that is similar to an STL vector
- *  except for two very important differences:
- *  - The elements of a BlockArray are not necessarily in one
- *    contiguous block of memory.
- *  - The address of a BlockArray element is guaranteed not to
- *    change over the lifetime of the BlockArray (or until the
- *    BlockArray is cleared.)
- */
-template<class T> class BlockArray
-{
-public:
-    BlockArray() :
-        m_blockSize(1000),
-        m_elementCount(0)
-    {
-    }
-
-    ~BlockArray()
-    {
-        clear();
-    }
-
-    unsigned int size() const
-    {
-        return m_elementCount;
-    }
-
-    /*! Append an item to the BlockArray. */
-    void add(T& element)
-    {
-        unsigned int blockIndex = m_elementCount / m_blockSize;
-        if (blockIndex == m_blocks.size())
-        {
-            T* newBlock = new T[m_blockSize];
-            m_blocks.push_back(newBlock);
-        }
-
-        unsigned int elementIndex = m_elementCount % m_blockSize;
-        m_blocks.back()[elementIndex] = element;
-
-        ++m_elementCount;
-    }
-
-    void clear()
-    {
-        for (typename std::vector<T*>::const_iterator iter = m_blocks.begin(); iter != m_blocks.end(); ++iter)
-        {
-            delete[] *iter;
-        }
-        m_elementCount = 0;
-        m_blocks.clear();
-    }
-
-    T& operator[](int index)
-    {
-        unsigned int blockNumber = index / m_blockSize;
-        unsigned int elementNumber = index % m_blockSize;
-        return m_blocks[blockNumber][elementNumber];
-    }
-
-    const T& operator[](int index) const
-    {
-        unsigned int blockNumber = index / m_blockSize;
-        unsigned int elementNumber = index % m_blockSize;
-        return m_blocks[blockNumber][elementNumber];
-    }
-
-private:
-    unsigned int m_blockSize;
-    unsigned int m_elementCount;
-    std::vector<T*> m_blocks;
-};
-
+class Star;
+class StarDatabaseBuilder;
 
 class StarDatabase
 {
- public:
-    StarDatabase();
+public:
+    // The size of the root star octree node is also the maximum distance
+    // distance from the Sun at which any star may be located. The current
+    // setting of 1.0e7 light years is large enough to contain the entire
+    // local group of galaxies. A larger value should be OK, but the
+    // performance implications for octree traversal still need to be
+    // investigated.
+    static constexpr float STAR_OCTREE_ROOT_SIZE = 1000000000.0f;
+
+    // Not exact, but any star with a catalog number greater than this is assumed to not be
+    // a HIPPARCOS stars.
+    static constexpr AstroCatalog::IndexNumber MAX_HIPPARCOS_NUMBER = 999999;
+
+    static constexpr unsigned int MAX_STAR_NAMES = 10;
+
+    StarDatabase() = default;
     ~StarDatabase();
 
+    inline Star* getStar(const std::uint32_t) const;
+    inline std::uint32_t size() const;
 
-    inline Star*  getStar(const uint32_t) const;
-    inline uint32_t size() const;
+    Star* find(AstroCatalog::IndexNumber catalogNumber) const;
+    Star* find(std::string_view, bool i18n) const;
 
-    Star* find(uint32_t catalogNumber) const;
-    Star* find(const std::string&) const;
-    uint32_t findCatalogNumberByName(const std::string&) const;
+    void getCompletion(std::vector<std::string>&, std::string_view) const;
 
-    std::vector<std::string> getCompletion(const std::string&) const;
-
-    void findVisibleStars(StarHandler& starHandler,
+    void findVisibleStars(celestia::engine::StarHandler& starHandler,
                           const Eigen::Vector3f& obsPosition,
-                          const Eigen::Quaternionf&   obsOrientation,
+                          const Eigen::Quaternionf& obsOrientation,
                           float fovY,
                           float aspectRatio,
                           float limitingMag) const;
 
-    void findCloseStars(StarHandler& starHandler,
+    void findCloseStars(celestia::engine::StarHandler& starHandler,
                         const Eigen::Vector3f& obsPosition,
                         float radius) const;
 
-    std::string getStarName    (const Star&, bool i18n = false) const;
-    void getStarName(const Star& star, char* nameBuffer, unsigned int bufferSize, bool i18n = false) const;
-    std::string getStarNameList(const Star&, const unsigned int maxNames = MAX_STAR_NAMES) const;
+    std::string getStarName(const Star&, bool i18n = false) const;
+    std::string getStarNameList(const Star&, unsigned int maxNames = MAX_STAR_NAMES) const;
 
-    StarNameDatabase* getNameDatabase() const;
-    void setNameDatabase(StarNameDatabase*);
-
-    bool load(std::istream&, const std::string& resourcePath);
-    bool loadBinary(std::istream&);
-
-    enum Catalog
-    {
-        HenryDraper = 0,
-        Gliese      = 1,
-        SAO         = 2,
-        MaxCatalog  = 3,
-    };
-
-    // Not exact, but any star with a catalog number greater than this is assumed to not be
-    // a HIPPARCOS stars.
-    static const uint32_t MAX_HIPPARCOS_NUMBER = 999999;
-
-    struct CrossIndexEntry
-    {
-        uint32_t catalogNumber;
-        uint32_t celCatalogNumber;
-
-        bool operator<(const CrossIndexEntry&) const;
-    };
-
-    typedef std::vector<CrossIndexEntry> CrossIndex;
-
-    bool   loadCrossIndex  (const Catalog, std::istream&);
-    uint32_t searchCrossIndexForCatalogNumber(const Catalog, const uint32_t number) const;
-    Star*  searchCrossIndex(const Catalog, const uint32_t number) const;
-    uint32_t crossIndex      (const Catalog, const uint32_t number) const;
-
-    void finish();
-
-    static StarDatabase* read(std::istream&);
+    const StarNameDatabase* getNameDatabase() const;
 
 private:
-    bool createStar(Star* star,
-                    DataDisposition disposition,
-                    uint32_t catalogNumber,
-                    Hash* starData,
-                    const std::string& path,
-                    const bool isBarycenter);
+    Star* searchCrossIndex(StarCatalog, AstroCatalog::IndexNumber number) const;
 
-    void buildOctree();
-    void buildIndexes();
-    Star* findWhileLoading(uint32_t catalogNumber) const;
+    std::unique_ptr<StarNameDatabase>             namesDB;
+    std::vector<std::uint32_t>                    catalogNumberIndex;
+    std::unique_ptr<celestia::engine::StarOctree> octreeRoot;
 
-    int nStars{ 0 };
-
-    Star*             stars{ nullptr };
-    StarNameDatabase* namesDB{ nullptr };
-    Star**            catalogNumberIndex{ nullptr };
-    StarOctree*       octreeRoot{ nullptr };
-    uint32_t            nextAutoCatalogNumber{ 0xfffffffe };
-
-    std::vector<CrossIndex*> crossIndexes;
-
-    // These values are used by the star database loader; they are
-    // not used after loading is complete.
-    BlockArray<Star> unsortedStars;
-    // List of stars loaded from binary file, sorted by catalog number
-    Star** binFileCatalogNumberIndex{ nullptr };
-    unsigned int binFileStarCount{ 0 };
-    // Catalog number -> star mapping for stars loaded from stc files
-    std::map<uint32_t, Star*> stcFileCatalogNumberIndex;
-
-    struct BarycenterUsage
-    {
-        uint32_t catNo;
-        uint32_t barycenterCatNo;
-    };
-    std::vector<BarycenterUsage> barycenters;
+    friend class StarDatabaseBuilder;
 };
 
-
-Star* StarDatabase::getStar(const uint32_t n) const
+inline Star*
+StarDatabase::getStar(const std::uint32_t n) const
 {
-    return stars + n;
+    return &(*octreeRoot)[n];
 }
 
-uint32_t StarDatabase::size() const
+inline std::uint32_t
+StarDatabase::size() const
 {
-    return nStars;
+    return octreeRoot->size();
 }
-
-#endif // _CELENGINE_STARDB_H_

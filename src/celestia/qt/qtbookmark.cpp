@@ -10,26 +10,67 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#include "celestia/url.h"
 #include "qtbookmark.h"
-#include "xbel.h"
-#include <QAbstractItemModel>
-#include <QSortFilterProxyModel>
-#include <QMessageBox>
-#include <QHeaderView>
-#include <QMimeData>
-#include <QStringList>
-#include <QMenu>
 
+#include <QAction>
+#include <QApplication>
+#include <QByteArray>
+#include <QChar>
+#include <QDataStream>
+#include <QFlag>
+#include <QIODevice>
+#include <QMenu>
+#include <QMessageBox>
+#include <QMimeData>
+#include <QModelIndex>
+#include <QModelIndexList>
+#include <QPixmap>
+#include <QSortFilterProxyModel>
+#include <QStyle>
+#include <QTreeView>
+#include <QVariant>
+
+#include <celestia/url.h>
+#include <celutil/gettext.h>
+#include "xbel.h"
+
+namespace celestia::qt
+{
+
+namespace
+{
+
+// Proxy model that filters out all items in the bookmark list which
+// are not folders.
+class OnlyFoldersProxyModel : public QSortFilterProxyModel
+{
+public:
+    OnlyFoldersProxyModel(QObject* parent)
+        : QSortFilterProxyModel(parent)
+    {
+    }
+
+    bool filterAcceptsRow(int row, const QModelIndex& parent) const
+    {
+        QModelIndex index = sourceModel()->index(row, 0, parent);
+        BookmarkItem::Type type = static_cast<BookmarkItem::Type>(sourceModel()->data(index, BookmarkTreeModel::TypeRole).toInt());
+        return type == BookmarkItem::Folder;
+    }
+
+    int columnCount(const QModelIndex& parent) const
+    {
+        return qMin(QSortFilterProxyModel::columnCount(parent), 1);
+    }
+};
+
+} // end unnamed namespace
 
 BookmarkItem::BookmarkItem(Type type, BookmarkItem* parent) :
     m_type(type),
-    m_parent(parent),
-    m_position(0)
+    m_parent(parent)
 {
 
 }
-
 
 BookmarkItem::Type
 BookmarkItem::type() const
@@ -37,13 +78,11 @@ BookmarkItem::type() const
     return m_type;
 }
 
-
 BookmarkItem*
 BookmarkItem::parent() const
 {
     return m_parent;
 }
-
 
 // private
 void
@@ -52,13 +91,11 @@ BookmarkItem::setParent(BookmarkItem* parent)
     m_parent = parent;
 }
 
-
 QString
 BookmarkItem::title() const
 {
     return m_title;
 }
-
 
 void
 BookmarkItem::setTitle(const QString& title)
@@ -66,13 +103,11 @@ BookmarkItem::setTitle(const QString& title)
     m_title = title;
 }
 
-
 QString
 BookmarkItem::url() const
 {
     return m_url;
 }
-
 
 bool
 BookmarkItem::folded() const
@@ -80,20 +115,17 @@ BookmarkItem::folded() const
     return m_folded;
 }
 
-
 void
 BookmarkItem::setFolded(bool folded)
 {
     m_folded = folded;
 }
 
-
 QString
 BookmarkItem::description() const
 {
     return m_description;
 }
-
 
 void
 BookmarkItem::setDescription(const QString& description)
@@ -102,13 +134,11 @@ BookmarkItem::setDescription(const QString& description)
 
 }
 
-
 QIcon
 BookmarkItem::icon() const
 {
     return m_icon;
 }
-
 
 void
 BookmarkItem::setIcon(const QIcon& icon)
@@ -116,13 +146,11 @@ BookmarkItem::setIcon(const QIcon& icon)
     m_icon = icon;
 }
 
-
 int
 BookmarkItem::childCount() const
 {
     return m_children.size();
 }
-
 
 BookmarkItem*
 BookmarkItem::child(int index) const
@@ -133,13 +161,11 @@ BookmarkItem::child(int index) const
         return m_children[index];
 }
 
-
 bool
 BookmarkItem::isRoot() const
 {
     return m_parent == nullptr;
 }
-
 
 void
 BookmarkItem::setUrl(const QString& url)
@@ -147,13 +173,11 @@ BookmarkItem::setUrl(const QString& url)
     m_url = url;
 }
 
-
 int
 BookmarkItem::position() const
 {
     return m_parent ? m_parent->childPosition(this) : 0;
 }
-
 
 int
 BookmarkItem::childPosition(const BookmarkItem* child) const
@@ -170,7 +194,6 @@ BookmarkItem::childPosition(const BookmarkItem* child) const
     return -1;
 }
 
-
 void
 BookmarkItem::insert(BookmarkItem* child, int beforeIndex)
 {
@@ -181,13 +204,11 @@ BookmarkItem::insert(BookmarkItem* child, int beforeIndex)
     m_children.insert(m_children.begin() + beforeIndex, child);
 }
 
-
 void
 BookmarkItem::append(BookmarkItem* child)
 {
     insert(child, m_children.size());
 }
-
 
 void
 BookmarkItem::removeChildren(int index, int count)
@@ -202,7 +223,6 @@ BookmarkItem::removeChildren(int index, int count)
     // TODO: delete the child
     m_children.erase(m_children.begin() + index, m_children.begin() + index + count);
 }
-
 
 BookmarkItem*
 BookmarkItem::clone(BookmarkItem* withParent) const
@@ -221,7 +241,6 @@ BookmarkItem::clone(BookmarkItem* withParent) const
     return newItem;
 }
 
-
 /***** BookmarkTreeModel *****/
 
 BookmarkTreeModel::~BookmarkTreeModel()
@@ -229,20 +248,17 @@ BookmarkTreeModel::~BookmarkTreeModel()
     delete m_root;
 }
 
-
 const BookmarkItem*
 BookmarkTreeModel::getItem(const QModelIndex& index) const
 {
     return static_cast<const BookmarkItem*>(index.internalPointer());
 }
 
-
 BookmarkItem*
 BookmarkTreeModel::getItem(const QModelIndex& index)
 {
     return static_cast<BookmarkItem*>(index.internalPointer());
 }
-
 
 QModelIndex
 BookmarkTreeModel::itemIndex(BookmarkItem* item)
@@ -252,7 +268,6 @@ BookmarkTreeModel::itemIndex(BookmarkItem* item)
     else
         return createIndex(item->position(), 0, item);
 }
-
 
 QModelIndex
 BookmarkTreeModel::index(int row, int column, const QModelIndex& parent) const
@@ -267,9 +282,8 @@ BookmarkTreeModel::index(int row, int column, const QModelIndex& parent) const
     Q_ASSERT(parentFolder->type() == BookmarkItem::Folder);
     Q_ASSERT(row < (int) parentFolder->childCount());
 
-    return createIndex(row, column, const_cast<void*>(reinterpret_cast<const void*>(parentFolder->child(row))));
+    return createIndex(row, column, parentFolder->child(row));
 }
-
 
 QModelIndex
 BookmarkTreeModel::parent(const QModelIndex& index) const
@@ -282,9 +296,8 @@ BookmarkTreeModel::parent(const QModelIndex& index) const
     if (parentFolder == m_root)
         return QModelIndex();
     else
-        return createIndex(parentFolder->position(), 0, reinterpret_cast<void*>(parentFolder));
+        return createIndex(parentFolder->position(), 0, parentFolder);
 }
-
 
 int
 BookmarkTreeModel::rowCount(const QModelIndex& parent) const
@@ -298,13 +311,11 @@ BookmarkTreeModel::rowCount(const QModelIndex& parent) const
     return getItem(parent)->childCount();
 }
 
-
 int
 BookmarkTreeModel::columnCount(const QModelIndex& parent) const
 {
     return parent.column() > 0 ? 0 : 2;
 }
-
 
 QVariant
 BookmarkTreeModel::data(const QModelIndex& index, int role) const
@@ -364,7 +375,6 @@ BookmarkTreeModel::data(const QModelIndex& index, int role) const
     }
 }
 
-
 bool
 BookmarkTreeModel::setData(const QModelIndex& index, const QVariant& value, int role)
 {
@@ -383,7 +393,6 @@ BookmarkTreeModel::setData(const QModelIndex& index, const QVariant& value, int 
     return false;
 }
 
-
 QVariant
 BookmarkTreeModel::headerData(int section, Qt::Orientation /* orientation */, int role) const
 {
@@ -391,16 +400,15 @@ BookmarkTreeModel::headerData(int section, Qt::Orientation /* orientation */, in
         return QVariant();
 
     if (section == 0)
-        return _("Title");
+        return QString(_("Title"));
     else
-        return _("Description");
+        return QString(_("Description"));
 }
-
 
 Qt::ItemFlags
 BookmarkTreeModel::flags(const QModelIndex& index) const
 {
-    Qt::ItemFlags flags = 0;
+    Qt::ItemFlags flags{QFlag{0}};
     if (index.isValid())
     {
         const BookmarkItem* item = getItem(index);
@@ -423,13 +431,11 @@ BookmarkTreeModel::flags(const QModelIndex& index) const
     return flags;
 }
 
-
 Qt::DropActions
 BookmarkTreeModel::supportedDropActions() const
 {
     return Qt::CopyAction | Qt::MoveAction;
 }
-
 
 bool
 BookmarkTreeModel::dropMimeData(const QMimeData* data, Qt::DropAction action, int row, int column, const QModelIndex& parent)
@@ -479,7 +485,6 @@ BookmarkTreeModel::dropMimeData(const QMimeData* data, Qt::DropAction action, in
     return true;
 }
 
-
 bool
 BookmarkTreeModel::removeRows(int row, int count, const QModelIndex& parent)
 {
@@ -496,7 +501,6 @@ BookmarkTreeModel::removeRows(int row, int count, const QModelIndex& parent)
     return true;
 }
 
-
 QStringList
 BookmarkTreeModel::mimeTypes() const
 {
@@ -504,7 +508,6 @@ BookmarkTreeModel::mimeTypes() const
     types << "application/celestia.text.list";
     return types;
 }
-
 
 QMimeData*
 BookmarkTreeModel::mimeData(const QModelIndexList& indexes) const
@@ -523,7 +526,6 @@ BookmarkTreeModel::mimeData(const QModelIndexList& indexes) const
     return mimeData;
 }
 
-
 void
 BookmarkTreeModel::addItem(BookmarkItem* item, int position)
 {
@@ -536,7 +538,6 @@ BookmarkTreeModel::addItem(BookmarkItem* item, int position)
     parentItem->insert(item, position);
     this->endInsertRows();
 }
-
 
 void
 BookmarkTreeModel::removeItem(BookmarkItem* item)
@@ -554,7 +555,6 @@ BookmarkTreeModel::removeItem(BookmarkItem* item)
 
 //    void changeItemTitle(BookmarkItem* item, const QString& newTitle);
 
-
 BookmarkManager::BookmarkManager(QObject* parent) :
     QObject(parent),
     m_root(nullptr),
@@ -563,13 +563,11 @@ BookmarkManager::BookmarkManager(QObject* parent) :
     m_model = new BookmarkTreeModel();
 }
 
-
 BookmarkTreeModel*
 BookmarkManager::model() const
 {
     return m_model;
 }
-
 
 void
 BookmarkManager::initializeBookmarks()
@@ -592,7 +590,6 @@ BookmarkManager::initializeBookmarks()
     m_model->m_root = m_root;
 }
 
-
 bool
 BookmarkManager::loadBookmarks(QIODevice* device)
 {
@@ -606,14 +603,12 @@ BookmarkManager::loadBookmarks(QIODevice* device)
     return m_root != nullptr;
 }
 
-
 bool
 BookmarkManager::saveBookmarks(QIODevice* device)
 {
     XbelWriter writer(device);
     return writer.write(m_model->m_root);
 }
-
 
 void
 BookmarkManager::populateBookmarkMenu(QMenu* menu)
@@ -627,7 +622,6 @@ BookmarkManager::populateBookmarkMenu(QMenu* menu)
         appendBookmarkMenuItems(menu, bookmarksMenuFolder);
 }
 
-
 QMenu*
 BookmarkManager::createBookmarkMenu(QWidget* parent, const BookmarkItem* item)
 {
@@ -635,7 +629,6 @@ BookmarkManager::createBookmarkMenu(QWidget* parent, const BookmarkItem* item)
     appendBookmarkMenuItems(menu, item);
     return menu;
 }
-
 
 void
 BookmarkManager::appendBookmarkMenuItems(QMenu* menu, const BookmarkItem* item)
@@ -673,7 +666,6 @@ BookmarkManager::appendBookmarkMenuItems(QMenu* menu, const BookmarkItem* item)
     }
 }
 
-
 void
 BookmarkManager::bookmarkMenuItemTriggered()
 {
@@ -683,7 +675,6 @@ BookmarkManager::bookmarkMenuItemTriggered()
         emit bookmarkTriggered(action->data().toString());
     }
 }
-
 
 /*! Return the root folder for the bookmarks menu. */
 BookmarkItem*
@@ -696,7 +687,6 @@ BookmarkManager::menuRootItem() const
     return nullptr;
 }
 
-
 /*! Return the root folder for the bookmarks tool bar. */
 BookmarkItem*
 BookmarkManager::toolBarRootItem() const
@@ -707,8 +697,6 @@ BookmarkManager::toolBarRootItem() const
 
     return nullptr;
 }
-
-
 
 /***** BookmarkToolBar class *****/
 
@@ -722,7 +710,6 @@ BookmarkToolBar::BookmarkToolBar(BookmarkManager* manager, QWidget* parent) :
     setMovable(true);
     setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
 }
-
 
 void
 BookmarkToolBar::rebuild()
@@ -772,31 +759,6 @@ BookmarkToolBar::rebuild()
     }
 }
 
-
-// Proxy model that filters out all items in the bookmark list which
-// are not folders.
-class OnlyFoldersProxyModel : public QSortFilterProxyModel
-{
-public:
-    OnlyFoldersProxyModel(QObject* parent)
-        : QSortFilterProxyModel(parent)
-    {
-    }
-
-    bool filterAcceptsRow(int row, const QModelIndex& parent) const
-    {
-        QModelIndex index = sourceModel()->index(row, 0, parent);
-        BookmarkItem::Type type = static_cast<BookmarkItem::Type>(sourceModel()->data(index, BookmarkTreeModel::TypeRole).toInt());
-        return type == BookmarkItem::Folder;
-    }
-
-    int columnCount(const QModelIndex& parent) const
-    {
-        return qMin(QSortFilterProxyModel::columnCount(parent), 1);
-    }
-};
-
-
 int AddBookmarkDialog::m_lastTimeSourceIndex = 0;
 
 AddBookmarkDialog::AddBookmarkDialog(BookmarkManager* manager,
@@ -840,7 +802,6 @@ AddBookmarkDialog::AddBookmarkDialog(BookmarkManager* manager,
     createInCombo->setCurrentIndex(firstItemIndex.row());
 }
 
-
 void
 AddBookmarkDialog::accept()
 {
@@ -870,7 +831,6 @@ AddBookmarkDialog::accept()
 
     QDialog::accept();
 }
-
 
 NewBookmarkFolderDialog::NewBookmarkFolderDialog(BookmarkManager* manager) :
     m_manager(manager)
@@ -902,7 +862,6 @@ NewBookmarkFolderDialog::NewBookmarkFolderDialog(BookmarkManager* manager) :
     createInCombo->setCurrentIndex(firstItemIndex.row());
 }
 
-
 void
 NewBookmarkFolderDialog::accept()
 {
@@ -919,7 +878,6 @@ NewBookmarkFolderDialog::accept()
 
     QDialog::accept();
 }
-
 
 OrganizeBookmarksDialog::OrganizeBookmarksDialog(BookmarkManager* manager) :
     m_manager(manager)
@@ -946,13 +904,11 @@ OrganizeBookmarksDialog::OrganizeBookmarksDialog(BookmarkManager* manager) :
     }
 }
 
-
 void
 OrganizeBookmarksDialog::accept()
 {
     QDialog::accept();
 }
-
 
 void
 OrganizeBookmarksDialog::on_newFolderButton_clicked()
@@ -995,7 +951,6 @@ OrganizeBookmarksDialog::on_newFolderButton_clicked()
     }
 }
 
-
 void
 OrganizeBookmarksDialog::on_newSeparatorButton_clicked()
 {
@@ -1034,7 +989,6 @@ OrganizeBookmarksDialog::on_newSeparatorButton_clicked()
     }
 }
 
-
 void
 OrganizeBookmarksDialog::on_removeItemButton_clicked()
 {
@@ -1049,3 +1003,5 @@ OrganizeBookmarksDialog::on_removeItemButton_clicked()
         }
     }
 }
+
+} // end namespace celestia::qt

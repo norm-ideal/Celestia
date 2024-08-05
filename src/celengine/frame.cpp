@@ -11,6 +11,8 @@
 // of the License, or (at your option) any later version.
 
 #include <cassert>
+#include <celastro/astro.h>
+#include <celastro/date.h>
 #include <celengine/star.h>
 #include <celengine/body.h>
 #include <celengine/deepskyobj.h>
@@ -20,6 +22,7 @@
 using namespace Eigen;
 using namespace std;
 
+namespace astro = celestia::astro;
 
 // Velocity for two-vector frames is computed by differentiation; units
 // are Julian days.
@@ -29,31 +32,9 @@ static const double ANGULAR_VELOCITY_DIFF_DELTA = 1.0 / 1440.0;
 /*** ReferenceFrame ***/
 
 ReferenceFrame::ReferenceFrame(Selection center) :
-    centerObject(center),
-    refCount(0)
+    centerObject(center)
 {
 }
-
-
-int
-ReferenceFrame::addRef() const
-{
-    return ++refCount;
-}
-
-
-int
-ReferenceFrame::release() const
-{
-    --refCount;
-    assert(refCount >= 0);
-    int refCountCopy = refCount;
-    if (refCount <= 0)
-        delete this;
-
-    return refCountCopy;
-}
-
 
 // High-precision rotation using 64.64 fixed point path. Rotate uc by
 // the rotation specified by unit quaternion q.
@@ -62,9 +43,9 @@ static UniversalCoord rotate(const UniversalCoord& uc, const Quaterniond& q)
     Matrix3d r = q.toRotationMatrix();
     UniversalCoord uc1;
 
-    uc1.x = uc.x * BigFix(r(0, 0)) + uc.y * BigFix(r(1, 0)) + uc.z * BigFix(r(2, 0));
-    uc1.y = uc.x * BigFix(r(0, 1)) + uc.y * BigFix(r(1, 1)) + uc.z * BigFix(r(2, 1));
-    uc1.z = uc.x * BigFix(r(0, 2)) + uc.y * BigFix(r(1, 2)) + uc.z * BigFix(r(2, 2));
+    uc1.x = uc.x * R128(r(0, 0)) + uc.y * R128(r(1, 0)) + uc.z * R128(r(2, 0));
+    uc1.y = uc.x * R128(r(0, 1)) + uc.y * R128(r(1, 1)) + uc.z * R128(r(2, 1));
+    uc1.z = uc.x * R128(r(0, 2)) + uc.y * R128(r(1, 2)) + uc.z * R128(r(2, 2));
 
     return uc1;
 }
@@ -79,7 +60,7 @@ static UniversalCoord rotate(const UniversalCoord& uc, const Quaterniond& q)
 UniversalCoord
 ReferenceFrame::convertFromUniversal(const UniversalCoord& uc, double tjd) const
 {
-    UniversalCoord uc1 = uc.difference(centerObject.getPosition(tjd));
+    UniversalCoord uc1 = uc - centerObject.getPosition(tjd);
     return rotate(uc1, getOrientation(tjd).conjugate());
 }
 
@@ -119,12 +100,12 @@ ReferenceFrame::convertToUniversal(const Quaterniond& q, double tjd) const
 Vector3d
 ReferenceFrame::convertFromAstrocentric(const Vector3d& p, double tjd) const
 {
-    if (centerObject.getType() == Selection::Type_Body)
+    if (centerObject.getType() == SelectionType::Body)
     {
         Vector3d center = centerObject.body()->getAstrocentricPosition(tjd);
         return getOrientation(tjd) * (p - center);
     }
-    else if (centerObject.getType() == Selection::Type_Star)
+    else if (centerObject.getType() == SelectionType::Star)
     {
         return getOrientation(tjd) * p;
     }
@@ -141,12 +122,12 @@ ReferenceFrame::convertFromAstrocentric(const Vector3d& p, double tjd) const
 Vector3d
 ReferenceFrame::convertToAstrocentric(const Vector3d& p, double tjd) const
 {
-    if (centerObject.getType() == Selection::Type_Body)
+    if (centerObject.getType() == SelectionType::Body)
     {
         Vector3d center = centerObject.body()->getAstrocentricPosition(tjd);
         return center + getOrientation(tjd).conjugate() * p;
     }
-    else if (centerObject.getType() == Selection::Type_Star)
+    else if (centerObject.getType() == SelectionType::Star)
     {
         return getOrientation(tjd).conjugate() * p;
     }
@@ -196,7 +177,7 @@ getFrameDepth(const Selection& sel, unsigned int depth, unsigned int maxDepth,
     if (depth > maxDepth)
         return depth;
 
-    Body* body = sel.body();
+    const Body* body = sel.body();
     if (sel.location() != nullptr)
         body = sel.location()->getParentBody();
 
@@ -208,16 +189,18 @@ getFrameDepth(const Selection& sel, unsigned int depth, unsigned int maxDepth,
     unsigned int orbitFrameDepth = depth;
     unsigned int bodyFrameDepth = depth;
     // TODO: need to check /all/ orbit frames of body
-    if (body->getOrbitFrame(0.0) != nullptr && frameType == ReferenceFrame::PositionFrame)
+    if (const ReferenceFrame* orbitFrame = body->getOrbitFrame(0.0).get();
+        orbitFrame != nullptr && frameType == ReferenceFrame::PositionFrame)
     {
-        orbitFrameDepth = body->getOrbitFrame(0.0)->nestingDepth(depth + 1, maxDepth, frameType);
+        orbitFrameDepth = orbitFrame->nestingDepth(depth + 1, maxDepth, frameType);
         if (orbitFrameDepth > maxDepth)
             return orbitFrameDepth;
     }
 
-    if (body->getBodyFrame(0.0) != nullptr && frameType == ReferenceFrame::OrientationFrame)
+    if (const ReferenceFrame* bodyFrame = body->getBodyFrame(0.0).get();
+        bodyFrame != nullptr && frameType == ReferenceFrame::OrientationFrame)
     {
-        bodyFrameDepth = body->getBodyFrame(0.0)->nestingDepth(depth + 1, maxDepth, frameType);
+        bodyFrameDepth = bodyFrame->nestingDepth(depth + 1, maxDepth, frameType);
     }
 
     return max(orbitFrameDepth, bodyFrameDepth);
@@ -298,11 +281,11 @@ BodyFixedFrame::getOrientation(double tjd) const
 
     switch (fixObject.getType())
     {
-    case Selection::Type_Body:
+    case SelectionType::Body:
         return yrot180 * fixObject.body()->getEclipticToBodyFixed(tjd);
-    case Selection::Type_Star:
+    case SelectionType::Star:
         return yrot180 * fixObject.star()->getRotationModel()->orientationAtTime(tjd);
-    case Selection::Type_Location:
+    case SelectionType::Location:
         if (fixObject.location()->getParentBody())
             return yrot180 * fixObject.location()->getParentBody()->getEclipticToBodyFixed(tjd);
         else
@@ -318,11 +301,11 @@ BodyFixedFrame::getAngularVelocity(double tjd) const
 {
     switch (fixObject.getType())
     {
-    case Selection::Type_Body:
+    case SelectionType::Body:
         return fixObject.body()->getAngularVelocity(tjd);
-    case Selection::Type_Star:
+    case SelectionType::Star:
         return fixObject.star()->getRotationModel()->angularVelocityAtTime(tjd);
-    case Selection::Type_Location:
+    case SelectionType::Location:
         if (fixObject.location()->getParentBody())
             return fixObject.location()->getParentBody()->getAngularVelocity(tjd);
         else
@@ -388,9 +371,9 @@ BodyMeanEquatorFrame::getOrientation(double tjd) const
 
     switch (equatorObject.getType())
     {
-    case Selection::Type_Body:
+    case SelectionType::Body:
         return equatorObject.body()->getEclipticToEquatorial(t);
-    case Selection::Type_Star:
+    case SelectionType::Star:
         return equatorObject.star()->getRotationModel()->equatorOrientationAtTime(t);
     default:
         return Quaterniond::Identity();
@@ -682,40 +665,6 @@ TwoVectorFrame::nestingDepth(unsigned int depth,
 }
 
 
-
-// Copy constructor
-FrameVector::FrameVector(const FrameVector& fv) :
-    vecType(fv.vecType),
-    observer(fv.observer),
-    target(fv.target),
-    vec(fv.vec),
-    frame(fv.frame)
-{
-    if (frame != nullptr)
-        frame->addRef();
-}
-
-
-// Assignment operator (since we have a copy constructor)
-FrameVector&
-FrameVector::operator=(const FrameVector& fv)
-{
-    vecType = fv.vecType;
-    observer = fv.observer;
-    target = fv.target;
-    vec = fv.vec;
-
-    if (frame != nullptr)
-        frame->release();
-    frame = fv.frame;
-    if (frame != nullptr)
-        frame->addRef();
-
-    return *this;
-}
-
-
-
 FrameVector::FrameVector(FrameVectorType t) :
     vecType(t),
     observer(),
@@ -723,13 +672,6 @@ FrameVector::FrameVector(FrameVectorType t) :
     vec(0.0, 0.0, 0.0),
     frame(nullptr)
 {
-}
-
-
-FrameVector::~FrameVector()
-{
-    if (frame != nullptr)
-        frame->release();
 }
 
 
@@ -759,13 +701,11 @@ FrameVector::createRelativeVelocityVector(const Selection& _observer,
 
 FrameVector
 FrameVector::createConstantVector(const Vector3d& _vec,
-                                  const ReferenceFrame* _frame)
+                                  const ReferenceFrame::SharedConstPtr& _frame)
 {
     FrameVector fv(ConstantVector);
     fv.vec = _vec;
     fv.frame = _frame;
-    if (fv.frame != nullptr)
-        fv.frame->addRef();
     return fv;
 }
 

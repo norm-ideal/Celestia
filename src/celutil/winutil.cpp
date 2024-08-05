@@ -1,6 +1,9 @@
-// winutil.h
+// winutil.cpp
 //
+// Copyright (C) 2019-present, Celestia Development Team
 // Copyright (C) 2002, Chris Laurel <claurel@shatters.net>
+//
+// Miscellaneous useful Windows-related functions.
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -9,68 +12,30 @@
 
 #include "winutil.h"
 
-void SetMouseCursor(LPCTSTR lpCursor)
-{
-    HCURSOR hNewCrsr;
+#include <windows.h>
 
-    if (hNewCrsr = LoadCursor(nullptr, lpCursor))
-        SetCursor(hNewCrsr);
+namespace celestia::util
+{
+
+std::string
+WideToUTF8(std::wstring_view ws)
+{
+    if (ws.empty())
+        return {};
+
+    // get a converted string length
+    const auto srcLen = static_cast<int>(ws.size());
+    int len = WideCharToMultiByte(CP_UTF8, 0, ws.data(), srcLen, nullptr, 0, nullptr, nullptr);
+    if (len <= 0)
+        return {};
+
+    std::string out(static_cast<std::string::size_type>(len), '\0');
+    len = WideCharToMultiByte(CP_UTF8, 0, ws.data(), srcLen, out.data(), len, nullptr, nullptr);
+    if (len <= 0)
+        return {};
+
+    out.resize(static_cast<std::size_t>(len));
+    return out;
 }
 
-void CenterWindow(HWND hParent, HWND hWnd)
-{
-    //Center window with hWnd handle relative to hParent.
-    if (hParent && hWnd)
-    {
-        RECT or, ir;
-        if (GetWindowRect(hParent, &or))
-        {
-            if (GetWindowRect(hWnd, &ir))
-            {
-                int x, y;
-
-                x = or.left + (or.right - or.left - (ir.right - ir.left)) / 2;
-                y = or.top + (or.bottom - or.top - (ir.bottom - ir.top)) / 2;;
-                SetWindowPos(hWnd, HWND_TOP, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
-            }
-        }
-    }
-}
-
-void RemoveButtonDefaultStyle(HWND hWnd)
-{
-    SetWindowLong(hWnd, GWL_STYLE,
-        ::GetWindowLong(hWnd, GWL_STYLE) & ~BS_DEFPUSHBUTTON);
-    InvalidateRect(hWnd, nullptr, TRUE);
-}
-
-void AddButtonDefaultStyle(HWND hWnd)
-{
-    SetWindowLong(hWnd, GWL_STYLE,
-        ::GetWindowLong(hWnd, GWL_STYLE) | BS_DEFPUSHBUTTON);
-    InvalidateRect(hWnd, nullptr, TRUE);
-}
-
-const char* CurrentCP()
-{
-    static bool set = false;
-    static char cp[20] = "CP";
-    if (!set) {
-        GetLocaleInfo(GetThreadLocale(), LOCALE_IDEFAULTANSICODEPAGE, cp+2, 18);
-        set = true;
-    }
-    return cp;
-}
-
-string UTF8ToCurrentCP(const string& str)
-{
-    string localeStr;
-    LPWSTR wout = new wchar_t[str.length() + 1];
-    LPSTR out = new char[str.length() + 1];
-    int wlength = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, wout, str.length() + 1);
-    WideCharToMultiByte(CP_ACP, 0, wout, -1, out, str.length() + 1, nullptr, nullptr);
-    localeStr = out;
-    delete [] wout;
-    delete [] out;
-    return localeStr;
-}
+} // end namespace celestia::util

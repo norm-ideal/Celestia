@@ -1,81 +1,95 @@
 // overlay.h
 //
-// Copyright (C) 2001, Chris Laurel <claurel@shatters.net>
+// Copyright (C) 2001-present, the Celestia Development Team
+// Original version by Chris Laurel <claurel@shatters.net>
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#ifndef _OVERLAY_H_
-#define _OVERLAY_H_
+#pragma once
 
+#include <locale>
 #include <string>
-#include <iostream>
-#include <celtxf/texturefont.h>
+#include <vector>
+#include <fmt/printf.h>
+#include <Eigen/Core>
+#include <celengine/textlayout.h>
 
-
+class Color;
 class Overlay;
+class Renderer;
 
-// Custom streambuf class to support C++ operator style output.  The
-// output is completely unbuffered so that it can coexist with printf
-// style output which the Overlay class also supports.
-class OverlayStreamBuf : public std::streambuf
+namespace celestia
+{
+class Rect;
+}
+
+class Overlay
 {
  public:
-    OverlayStreamBuf();
-
-    void setOverlay(Overlay*);
-
-    int overflow(int c = EOF);
-
-    enum UTF8DecodeState
-    {
-        UTF8DecodeStart     = 0,
-        UTF8DecodeMultibyte = 1,
-    };
-
- private:
-    Overlay* overlay{ nullptr };
-
-    UTF8DecodeState decodeState{ UTF8DecodeStart };
-    wchar_t decodedChar{ 0 };
-    unsigned int decodeShift{ 0 };
-};
-
-
-class Overlay : public std::ostream
-{
- public:
-    Overlay();
+    Overlay(Renderer&);
+    Overlay() = delete;
     ~Overlay() = default;
 
     void begin();
     void end();
 
     void setWindowSize(int, int);
-    void setFont(TextureFont*);
+    void setFont(const std::shared_ptr<TextureFont>&);
+    void setTextAlignment(celestia::engine::TextLayout::HorizontalAlignment halign);
 
-    void rect(float x, float y, float w, float h, bool fill = true);
+    void setColor(float r, float g, float b, float a);
+    void setColor(const Color& c);
+    void setColor(const Color& c, float a);
+
+    void moveBy(float dx, float dy);
+    void moveBy(int dx, int dy);
+    void savePos();
+    void restorePos();
+
+    Renderer& getRenderer() const
+    {
+        return renderer;
+    };
+
+    void drawRectangle(const celestia::Rect&) const;
 
     void beginText();
     void endText();
-    void print(wchar_t);
-    void print(char);
-    void print(const char*);
+
+    void print(std::string_view);
+
+    template <typename... T>
+    void print(const std::locale& loc, std::string_view format, const T&... args)
+    {
+        static_assert(sizeof...(args) > 0);
+        print(fmt::format(loc, format, args...));
+    }
+
+    template <typename... T>
+    void print(std::string_view format, const T&... args)
+    {
+        static_assert(sizeof...(args) > 0);
+        print(fmt::format(format, args...));
+    }
+
+    template <typename... T>
+    void printf(std::string_view format, const T&... args)
+    {
+        static_assert(sizeof...(args) > 0);
+        print(fmt::sprintf(format, args...));
+    }
 
  private:
     int windowWidth{ 1 };
     int windowHeight{ 1 };
-    TextureFont* font{ nullptr };
-    bool useTexture{ false };
-    bool fontChanged{ false };
-    int textBlock{ 0 };
 
-    float xoffset{ 0.0f };
-    float yoffset{ 0.0f };
+    std::unique_ptr<celestia::engine::TextLayout> layout{ nullptr };
 
-    OverlayStreamBuf sbuf;
+    Renderer& renderer;
+
+    std::vector<std::pair<float, float>> posStack;
+    Eigen::Matrix4f projection;
 };
-
-#endif // _OVERLAY_H_

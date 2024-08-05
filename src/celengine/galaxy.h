@@ -8,101 +8,86 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#ifndef _GALAXY_H_
-#define _GALAXY_H_
+#pragma once
 
-#include <celengine/deepskyobj.h>
+#include <cstdint>
+#include <cstddef>
+#include <string>
 
+#include <Eigen/Core>
+#include <Eigen/Geometry>
 
-struct Blob
+#include <celcompat/filesystem.h>
+#include "deepskyobj.h"
+
+class AssociativeArray;
+struct Matrices;
+class Renderer;
+
+enum class GalaxyType
 {
-    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-
-    Eigen::Vector4f position;
-    unsigned int    colorIndex;
-    float           brightness;
+    Irr  =  0,
+    S0   =  1,
+    Sa   =  2,
+    Sb   =  3,
+    Sc   =  4,
+    SBa  =  5,
+    SBb  =  6,
+    SBc  =  7,
+    E0   =  8,
+    E1   =  9,
+    E2   = 10,
+    E3   = 11,
+    E4   = 12,
+    E5   = 13,
+    E6   = 14,
+    E7   = 15,
 };
 
-class GalacticForm;
 
 class Galaxy : public DeepSkyObject
 {
- public:
-    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+public:
+    constexpr static float kMaxSpiralThickness = 0.06f;
 
-    virtual const char* getType() const;
-    virtual void setType(const std::string&);
-    virtual std::string getDescription() const;
-    virtual std::string getCustomTmpName() const;
-    virtual void setCustomTmpName(const std::string&);
+    const char* getType() const override;
+    void setType(const std::string&) override;
+    std::string getDescription() const override;
 
     float getDetail() const;
     void setDetail(float);
-    //    float getBrightness() const;
-    //    void setBrightness();
 
-    virtual bool pick(const Ray3d& ray,
-                      double& distanceToPicker,
-                      double& cosAngleToBoundCenter) const;
-    virtual bool load(AssociativeArray*, const std::string&);
-    virtual void render(const Eigen::Vector3f& offset,
-                        const Eigen::Quaternionf& viewerOrientation,
-                        float brightness,
-                        float pixelSize,
-                        const Renderer* r = nullptr);
-    virtual void renderGalaxyPointSprites(const Eigen::Vector3f& offset,
-                                          const Eigen::Quaternionf& viewerOrientation,
-                                          float brightness,
-                                          float pixelSize);
-#if 0
-    virtual void renderGalaxyEllipsoid(const Eigen::Vector3f& offset,
-                                       const Eigen::Quaternionf& viewerOrientation,
-                                       float brightness,
-                                       float pixelSize);
-#endif
-
-    GalacticForm* getForm() const;
+    bool pick(const Eigen::ParametrizedLine<double, 3>& ray,
+              double& distanceToPicker,
+              double& cosAngleToBoundCenter) const override;
+    bool load(const AssociativeArray*, const fs::path&) override;
 
     static void  increaseLightGain();
     static void  decreaseLightGain();
     static float getLightGain();
     static void  setLightGain(float);
 
-    virtual unsigned int getRenderMask() const;
-    virtual unsigned int getLabelMask() const;
+    std::uint64_t getRenderMask() const override;
+    unsigned int getLabelMask() const override;
 
-    virtual const char* getObjTypeName() const;
+    DeepSkyObjectType getObjType() const override;
 
- public:
-    enum GalaxyType {
-        S0   =  0,
-        Sa   =  1,
-        Sb   =  2,
-        Sc   =  3,
-        SBa  =  4,
-        SBb  =  5,
-        SBc  =  6,
-        E0   =  7,
-        E1   =  8,
-        E2   =  9,
-        E3   = 10,
-        E4   = 11,
-        E5   = 12,
-        E6   = 13,
-        E7   = 14,
-        Irr  = 15
-    };
+    int getFormId() const;
 
- private:
-    float detail{ 1.0f };
-    std::string* customTmpName{ nullptr };
-    //    float brightness;
-    GalaxyType type{ S0 };
-    GalacticForm* form{ nullptr };
+    GalaxyType getGalaxyType() const;
+
+    float getBrightnessCorrection(const Eigen::Vector3f &) const;
+
+private:
+    // TODO: This value is just a guess.
+    // To be optimal, it should actually be computed:
+    constexpr static float kRadiusCorrection = 0.025f;
+
+    void setForm(const fs::path&, const fs::path& = {});
+
+    float       detail{ 1.0f };
+    GalaxyType  type{ GalaxyType::Irr };
+    int         form{ 0 };
 
     static float lightGain;
 };
-
-//std::ostream& operator<<(std::ostream& s, const Galaxy::GalaxyType& sc);
-
-#endif // _GALAXY_H_

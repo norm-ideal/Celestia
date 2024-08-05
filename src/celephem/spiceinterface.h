@@ -9,17 +9,20 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#ifndef _CELENGINE_SPICEINTERFACE_H_
-#define _CELENGINE_SPICEINTERFACE_H_
+#pragma once
 
 #include <string>
 
-extern bool InitializeSpice();
+#include <celcompat/filesystem.h>
+
+namespace celestia::ephem
+{
+
+bool InitializeSpice();
 
 // SPICE utility functions
 
-extern bool GetNaifId(const std::string& name, int* id);
-extern bool IsSpiceKernelLoaded(const std::string& filepath);
-extern bool LoadSpiceKernel(const std::string& filepath);
+bool GetNaifId(const std::string& name, int* id);
+bool LoadSpiceKernel(const fs::path& filepath);
 
-#endif // _CELENGINE_SPICEINTERFACE_H_
+}

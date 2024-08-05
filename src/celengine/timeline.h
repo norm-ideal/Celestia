@@ -10,15 +10,11 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#ifndef _CELENGINE_TIMELINE_H_
-#define _CELENGINE_TIMELINE_H_
+#pragma once
 
+#include <memory>
 #include <vector>
-
-class ReferenceFrame;
-class Orbit;
-class RotationModel;
-class TimelinePhase;
+#include "timelinephase.h"
 
 class Timeline
 {
@@ -26,9 +22,9 @@ public:
     Timeline() = default;
     ~Timeline();
 
-    const TimelinePhase* findPhase(double t) const;
-    bool appendPhase(TimelinePhase*);
-    const TimelinePhase* getPhase(unsigned int n) const;
+    const TimelinePhase::SharedConstPtr& findPhase(double t) const;
+    bool appendPhase(TimelinePhase::SharedConstPtr&);
+    const TimelinePhase::SharedConstPtr& getPhase(unsigned int n) const;
     unsigned int phaseCount() const;
 
     double startTime() const;
@@ -38,7 +34,5 @@ public:
     void markChanged();
 
 private:
-    std::vector<TimelinePhase*> phases;
+    std::vector<TimelinePhase::SharedConstPtr> phases;
 };
-
-#endif // _CELENGINE_TIMELINE_H_

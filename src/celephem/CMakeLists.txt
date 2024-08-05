@@ -13,6 +13,8 @@ set(CELEPHEM_SOURCES
   precession.h
   rotation.cpp
   rotation.h
+  sampfile.cpp
+  sampfile.h
   samporbit.cpp
   samporbit.h
   samporient.cpp
@@ -44,16 +46,8 @@ if(ENABLE_CELX)
   )
 endif()
 
-add_library(celephem STATIC ${CELEPHEM_SOURCES})
-if(ENABLE_SPICE)
-  target_link_libraries(celephem CSPICE::CSPICE)
-endif()
-cotire(celephem)
-#[[
-add_library(celephem SHARED ${CELEPHEM_SOURCES})
-set_target_properties(celephem PROPERTIES
-  VERSION ${VERSION}
-  SOVERSION ${VERSION}
-)
-]]#
-#install(TARGETS celephem LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
+# These object files are merged in the celegine library
+add_library(celephem OBJECT ${CELEPHEM_SOURCES})
+
+gperf_add_table(celephem customrotation.gperf customrotation.cpp 4)
+gperf_add_table(celephem customorbit.gperf    customorbit.cpp    4)

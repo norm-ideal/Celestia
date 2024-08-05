@@ -7,19 +7,19 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#ifndef _MOVIECAPTURE_H_
-#define _MOVIECAPTURE_H_
+#pragma once
 
-#include <string>
+#include <celcompat/filesystem.h>
 
+class Renderer;
 
 class MovieCapture
 {
- public:
-    MovieCapture() {};
-    virtual ~MovieCapture() {};
+public:
+    MovieCapture(const Renderer *r) : renderer(r) {};
+    virtual ~MovieCapture() = default;
 
-    virtual bool start(const std::string& filename,
+    virtual bool start(const fs::path& filename,
                        int width, int height,
                        float fps) = 0;
     virtual bool end() = 0;
@@ -32,8 +32,18 @@ class MovieCapture
 
     virtual void setAspectRatio(int aspectNumerator, int aspectDenominator) = 0;
     virtual void setQuality(float) = 0;
-    virtual void recordingStatus(bool started) = 0; /* to update UI recording status indicator */
+    bool recordingStatus() const { return m_recordingStatus; }
+    void recordingStatus(bool started)
+    {
+        m_recordingStatus = started;
+        recordingStatusUpdated(started);
+    }
+
+protected:
+    const Renderer *renderer{ nullptr };
+
+    virtual void recordingStatusUpdated(bool started) = 0;
+
+private:
+    bool m_recordingStatus;
 };
-
-#endif // _MOVIECAPTURE_H_
-

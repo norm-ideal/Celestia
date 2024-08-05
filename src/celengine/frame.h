@@ -8,14 +8,12 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#ifndef _CELENGINE_FRAME_H_
-#define _CELENGINE_FRAME_H_
+#pragma once
 
-#include <celengine/astro.h>
 #include <celengine/selection.h>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
-
+#include "shared.h"
 
 /*! A ReferenceFrame object has a center and set of orthogonal axes.
  *
@@ -26,11 +24,10 @@
 class ReferenceFrame
 {
  public:
-    ReferenceFrame(Selection center);
-    virtual ~ReferenceFrame() {};
+    SHARED_TYPES(ReferenceFrame)
 
-    int addRef() const;
-    int release() const;
+    explicit ReferenceFrame(Selection center);
+    virtual ~ReferenceFrame() = default;
 
     UniversalCoord convertFromUniversal(const UniversalCoord& uc, double tjd) const;
     UniversalCoord convertToUniversal(const UniversalCoord& uc, double tjd) const;
@@ -61,7 +58,6 @@ class ReferenceFrame
 
  private:
     Selection centerObject;
-    mutable int refCount;
 };
 
 
@@ -71,13 +67,13 @@ class ReferenceFrame
 class CachingFrame : public ReferenceFrame
 {
  public:
-    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+    SHARED_TYPES(CachingFrame)
 
-    CachingFrame(Selection _center);
-    virtual ~CachingFrame() {};
+    explicit CachingFrame(Selection _center);
+    ~CachingFrame() override = default;
 
-    Eigen::Quaterniond getOrientation(double tjd) const;
-    Eigen::Vector3d getAngularVelocity(double tjd) const;
+    Eigen::Quaterniond getOrientation(double tjd) const override;
+    Eigen::Vector3d getAngularVelocity(double tjd) const override;
     virtual Eigen::Quaterniond computeOrientation(double tjd) const = 0;
     virtual Eigen::Vector3d computeAngularVelocity(double tjd) const;
 
@@ -94,19 +90,21 @@ class CachingFrame : public ReferenceFrame
 class J2000EclipticFrame : public ReferenceFrame
 {
  public:
-    J2000EclipticFrame(Selection center);
-    virtual ~J2000EclipticFrame() {};
+    SHARED_TYPES(J2000EclipticFrame)
 
-    Eigen::Quaterniond getOrientation(double /* tjd */) const
+    explicit J2000EclipticFrame(Selection center);
+    ~J2000EclipticFrame() override = default;
+
+    Eigen::Quaterniond getOrientation(double /* tjd */) const override
     {
         return Eigen::Quaterniond::Identity();
     }
 
-    virtual bool isInertial() const;
+    bool isInertial() const override;
 
-    virtual unsigned int nestingDepth(unsigned int depth,
-                                      unsigned int maxDepth,
-                                      FrameType frameType) const;
+    unsigned int nestingDepth(unsigned int depth,
+                              unsigned int maxDepth,
+                              FrameType frameType) const override;
 };
 
 
@@ -114,13 +112,15 @@ class J2000EclipticFrame : public ReferenceFrame
 class J2000EquatorFrame : public ReferenceFrame
 {
  public:
-    J2000EquatorFrame(Selection center);
-    virtual ~J2000EquatorFrame() {};
-    Eigen::Quaterniond getOrientation(double tjd) const;
-    virtual bool isInertial() const;
-    virtual unsigned int nestingDepth(unsigned int depth,
-                                      unsigned int maxDepth,
-                                      FrameType frameType) const;
+    SHARED_TYPES(J2000EquatorFrame)
+
+    explicit J2000EquatorFrame(Selection center);
+    ~J2000EquatorFrame() override = default;
+    Eigen::Quaterniond getOrientation(double tjd) const override;
+    bool isInertial() const override;
+    unsigned int nestingDepth(unsigned int depth,
+                              unsigned int maxDepth,
+                              FrameType frameType) const override;
 };
 
 
@@ -133,14 +133,16 @@ class J2000EquatorFrame : public ReferenceFrame
 class BodyFixedFrame : public ReferenceFrame
 {
  public:
+    SHARED_TYPES(BodyFixedFrame)
+
     BodyFixedFrame(Selection center, Selection obj);
-    virtual ~BodyFixedFrame() {};
-    Eigen::Quaterniond getOrientation(double tjd) const;
-    virtual Eigen::Vector3d getAngularVelocity(double tjd) const;
-    virtual bool isInertial() const;
-    virtual unsigned int nestingDepth(unsigned int depth,
-                                      unsigned int maxDepth,
-                                      FrameType frameType) const;
+    ~BodyFixedFrame() override = default;
+    Eigen::Quaterniond getOrientation(double tjd) const override;
+    Eigen::Vector3d getAngularVelocity(double tjd) const override;
+    bool isInertial() const override;
+    unsigned int nestingDepth(unsigned int depth,
+                              unsigned int maxDepth,
+                              FrameType frameType) const override;
 
  private:
     Selection fixObject;
@@ -150,15 +152,17 @@ class BodyFixedFrame : public ReferenceFrame
 class BodyMeanEquatorFrame : public ReferenceFrame
 {
  public:
+    SHARED_TYPES(BodyMeanEquatorFrame)
+
     BodyMeanEquatorFrame(Selection center, Selection obj, double freeze);
     BodyMeanEquatorFrame(Selection center, Selection obj);
-    virtual ~BodyMeanEquatorFrame() {};
-    Eigen::Quaterniond getOrientation(double tjd) const;
-    virtual Eigen::Vector3d getAngularVelocity(double tjd) const;
-    virtual bool isInertial() const;
-    virtual unsigned int nestingDepth(unsigned int depth,
-                                      unsigned int maxDepth,
-                                      FrameType frameType) const;
+    ~BodyMeanEquatorFrame() override = default;
+    Eigen::Quaterniond getOrientation(double tjd) const override;
+    Eigen::Vector3d getAngularVelocity(double tjd) const override;
+    bool isInertial() const override;
+    unsigned int nestingDepth(unsigned int depth,
+                              unsigned int maxDepth,
+                              FrameType frameType) const override;
 
  private:
     Selection equatorObject;
@@ -172,12 +176,6 @@ class BodyMeanEquatorFrame : public ReferenceFrame
 class FrameVector
 {
  public:
-    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-
-    FrameVector(const FrameVector& fv);
-    ~FrameVector();
-    FrameVector& operator=(const FrameVector&);
-
     Eigen::Vector3d direction(double tjd) const;
 
     /*! Frames can be defined in reference to other frames; this method
@@ -199,7 +197,7 @@ class FrameVector
     static FrameVector createRelativeVelocityVector(const Selection& _observer,
                                                     const Selection& _target);
     static FrameVector createConstantVector(const Eigen::Vector3d& _vec,
-                                            const ReferenceFrame* _frame);
+                                            const ReferenceFrame::SharedConstPtr& _frame);
 
  private:
     /*! Type-only constructor is private. Code outside the class should
@@ -211,7 +209,7 @@ class FrameVector
     Selection observer;
     Selection target;
     Eigen::Vector3d vec;                   // constant vector
-    const ReferenceFrame* frame; // frame for constant vector
+    ReferenceFrame::SharedConstPtr frame; // frame for constant vector
 };
 
 
@@ -234,13 +232,13 @@ class TwoVectorFrame : public CachingFrame
                    int primAxis,
                    const FrameVector& sec,
                    int secAxis);
-    virtual ~TwoVectorFrame() {};
+    ~TwoVectorFrame() override = default;
 
-    Eigen::Quaterniond computeOrientation(double tjd) const;
-    virtual bool isInertial() const;
-    virtual unsigned int nestingDepth(unsigned int depth,
-                                      unsigned int maxDepth,
-                                      FrameType frameType) const;
+    Eigen::Quaterniond computeOrientation(double tjd) const override;
+    bool isInertial() const override;
+    unsigned int nestingDepth(unsigned int depth,
+                              unsigned int maxDepth,
+                              FrameType frameType) const override;
 
     //! The sine of minimum angle between the primary and secondary vectors
     static const double Tolerance;
@@ -252,5 +250,3 @@ class TwoVectorFrame : public CachingFrame
     int secondaryAxis;
     int tertiaryAxis;
 };
-
-#endif // _CELENGINE_FRAME_H_

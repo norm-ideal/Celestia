@@ -1,5 +1,6 @@
 // texmanager.cpp
 //
+// Copyright (C) 2001-present, Celestia Development Team
 // Copyright (C) 2001 Chris Laurel <claurel@shatters.net>
 //
 // This program is free software; you can redistribute it and/or
@@ -7,104 +8,79 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#include "celestia.h"
-#include <celutil/debug.h>
-#include <iostream>
-#include <fstream>
-#include "multitexture.h"
 #include "texmanager.h"
 
-using namespace std;
+#include <array>
+#include <cstddef>
+#include <fstream>
+#include <string_view>
 
+#include <celutil/fsutils.h>
+#include <celutil/logger.h>
 
-static TextureManager* textureManager = nullptr;
+using namespace std::string_view_literals;
+using celestia::util::GetLogger;
 
-static const char *directories[]=
+namespace
 {
-    "/lores/",
-    "/medres/",
-    "/hires/"
+
+constexpr std::array<std::string_view, 3> directories =
+{
+    "lores"sv,
+    "medres"sv,
+    "hires"sv,
 };
 
-
-TextureManager* GetTextureManager()
+constexpr std::array extensions =
 {
-    if (textureManager == nullptr)
-        textureManager = new TextureManager("textures");
+#ifdef USE_LIBAVIF
+    "avif"sv,
+#endif
+    "png"sv,
+    "jpg"sv,
+    "jpeg"sv,
+    "dds"sv,
+    "dxt5nm"sv,
+    "ctx"sv,
+};
+
+} // end unnamed namespace
+
+TextureManager*
+GetTextureManager()
+{
+    static TextureManager* const textureManager = std::make_unique<TextureManager>("textures").release(); //NOSONAR
     return textureManager;
 }
 
-
-static string resolveWildcard(const string& filename)
+fs::path
+TextureInfo::resolve(const fs::path& baseDir) const
 {
-    string base(filename, 0, filename.length() - 1);
-
-    string pngfile = base + "png";
-    {
-        ifstream in(pngfile);
-        if (in.good())
-            return pngfile;
-    }
-    string jpgfile = base + "jpg";
-    {
-        ifstream in(jpgfile);
-        if (in.good())
-            return jpgfile;
-    }
-    string ddsfile = base + "dds";
-    {
-        ifstream in(ddsfile);
-        if (in.good())
-            return ddsfile;
-    }
-    string dxt5file = base + "dxt5nm";
-    {
-        ifstream in(dxt5file);
-        if (in.good())
-            return dxt5file;
-    }
-    string ctxfile = base + "ctx";
-    {
-        ifstream in(ctxfile);
-        if (in.good())
-            return ctxfile;
-    }
-
-    return "";
-}
-
-
-string TextureInfo::resolve(const string& baseDir)
-{
-    bool wildcard = false;
-    if (!source.empty() && source.at(source.length() - 1) == '*')
-        wildcard = true;
+    bool wildcard = source.extension() == ".*";
 
     if (!path.empty())
     {
-        string filename = path + "/textures" + directories[resolution] + source;
+        fs::path filename = path / "textures" / directories[resolution] / source;
         // cout << "Resolve: testing [" << filename << "]\n";
         if (wildcard)
         {
-            filename = resolveWildcard(filename);
+            filename = celestia::util::ResolveWildcard(filename, extensions);
             if (!filename.empty())
                 return filename;
         }
         else
         {
-            ifstream in(filename);
+            std::ifstream in(filename);
             if (in.good())
                 return filename;
         }
     }
 
-    string filename = baseDir + directories[resolution] + source;
+    fs::path filename = baseDir / directories[resolution] / source;
     if (wildcard)
     {
-        string matched = resolveWildcard(filename);
-        if (matched.empty())
-            return filename; // . . . for lack of any better way to handle it.
-        else
+        fs::path matched = celestia::util::ResolveWildcard(filename, extensions);
+        if (!matched.empty())
             return matched;
     }
 
@@ -112,10 +88,12 @@ string TextureInfo::resolve(const string& baseDir)
 }
 
 
-Texture* TextureInfo::load(const string& name)
+std::unique_ptr<Texture>
+TextureInfo::load(const fs::path& name) const
 {
     Texture::AddressMode addressMode = Texture::EdgeClamp;
-    Texture::MipMapMode mipMode = Texture::DefaultMipMaps;
+    Texture::MipMapMode  mipMode     = Texture::DefaultMipMaps;
+    Texture::Colorspace  colorspace  = Texture::DefaultColorspace;
 
     if (flags & WrapTexture)
         addressMode = Texture::Wrap;
@@ -124,19 +102,16 @@ Texture* TextureInfo::load(const string& name)
 
     if (flags & NoMipMaps)
         mipMode = Texture::NoMipMaps;
-    else if (flags & AutoMipMaps)
-        mipMode = Texture::AutoMipMaps;
+
+    if (flags & LinearColorspace)
+        colorspace = Texture::LinearColorspace;
 
     if (bumpHeight == 0.0f)
     {
-        DPRINTF(0, "Loading texture: %s\n", name.c_str());
-        // cout << "Loading texture: " << name << '\n';
-
-        return LoadTextureFromFile(name, addressMode, mipMode);
+        GetLogger()->debug("Loading texture: {}\n", name);
+        return LoadTextureFromFile(name, addressMode, mipMode, colorspace);
     }
 
-    DPRINTF(0, "Loading bump map: %s\n", name.c_str());
-    // cout << "Loading texture: " << name << '\n';
-
+    GetLogger()->debug("Loading bump map: {}\n", name);
     return LoadHeightMapFromFile(name, bumpHeight, addressMode);
 }

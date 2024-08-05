@@ -1,8 +1,7 @@
 set(CELENGINE_SOURCES
   asterism.cpp
   asterism.h
-  astro.cpp
-  astro.h
+  astroobj.h
   atmosphere.h
   axisarrow.cpp
   axisarrow.h
@@ -10,57 +9,53 @@ set(CELENGINE_SOURCES
   body.h
   boundaries.cpp
   boundaries.h
-  catalogxref.cpp
-  catalogxref.h
   category.cpp
   category.h
-  catentry.cpp
-  catentry.h
-  celestia.h
-  cmdparser.cpp
-  cmdparser.h
-  command.cpp
-  command.h
   console.cpp
   console.h
   constellation.cpp
   constellation.h
   curveplot.cpp
   curveplot.h
-  dds.cpp
   deepskyobj.cpp
   deepskyobj.h
-  dispmap.cpp
-  dispmap.h
   dsodb.cpp
   dsodb.h
-  dsoname.cpp
-  dsoname.h
+  dsodbbuilder.cpp
+  dsodbbuilder.h
   dsooctree.cpp
   dsooctree.h
-  execenv.h
-  execution.cpp
-  execution.h
+  dsorenderer.cpp
+  dsorenderer.h
+  fisheyeprojectionmode.cpp
+  fisheyeprojectionmode.h
   frame.cpp
   frame.h
+  framebuffer.cpp
+  framebuffer.h
   frametree.cpp
   frametree.h
   galaxy.cpp
   galaxy.h
+  galaxyform.cpp
+  galaxyform.h
   geometry.h
-  glcontext.cpp
-  glcontext.h
+  glmarker.cpp
   globular.cpp
   globular.h
   glshader.cpp
   glshader.h
-  image.cpp
-  image.h
+  glsupport.cpp
+  glsupport.h
+  hash.cpp
+  hash.h
   lightenv.h
   location.cpp
   location.h
   lodspheremesh.cpp
   lodspheremesh.h
+  mapmanager.cpp
+  mapmanager.h
   marker.cpp
   marker.h
   meshmanager.cpp
@@ -73,40 +68,51 @@ set(CELENGINE_SOURCES
   name.h
   nebula.cpp
   nebula.h
+  objectrenderer.h
   observer.cpp
   observer.h
   octree.h
+  octreebuilder.h
   opencluster.cpp
   opencluster.h
+  orbitsampler.h
   overlay.cpp
   overlay.h
+  overlayimage.cpp
+  overlayimage.h
   parseobject.cpp
   parseobject.h
   parser.cpp
   parser.h
-#  particlesystem.cpp
-#  particlesystemfile.cpp
-#  particlesystemfile.h
-#  particlesystem.h
+  perspectiveprojectionmode.cpp
+  perspectiveprojectionmode.h
   planetgrid.cpp
   planetgrid.h
+  pointstarrenderer.cpp
+  pointstarrenderer.h
+  pointstarvertexbuffer.cpp
+  pointstarvertexbuffer.h
+  projectionmode.cpp
+  projectionmode.h
+  rectangle.h
   referencemark.h
   rendcontext.cpp
   rendcontext.h
   render.cpp
+  render.h
   renderglsl.cpp
   renderglsl.h
-  render.h
   renderinfo.h
+  renderlistentry.h
   rotationmanager.cpp
   rotationmanager.h
   selection.cpp
   selection.h
   shadermanager.cpp
   shadermanager.h
+  shared.h
   simulation.cpp
   simulation.h
-  skygrid.cpp
   skygrid.h
   solarsys.cpp
   solarsys.h
@@ -120,6 +126,8 @@ set(CELENGINE_SOURCES
   star.h
   stardb.cpp
   stardb.h
+  stardbbuilder.cpp
+  stardbbuilder.h
   starname.cpp
   starname.h
   staroctree.cpp
@@ -129,36 +137,30 @@ set(CELENGINE_SOURCES
   surface.h
   texmanager.cpp
   texmanager.h
+  textlayout.cpp
+  textlayout.h
   texture.cpp
   texture.h
   timeline.cpp
   timeline.h
   timelinephase.cpp
   timelinephase.h
-  tokenizer.cpp
-  tokenizer.h
   trajmanager.cpp
   trajmanager.h
-  univcoord.cpp
   univcoord.h
   universe.cpp
   universe.h
-  vecgl.h
+  value.cpp
+  value.h
+  viewporteffect.h
+  viewporteffect.cpp
   virtualtex.cpp
   virtualtex.h
   visibleregion.cpp
   visibleregion.h
 )
 
-add_library(celengine STATIC ${CELENGINE_SOURCES})
-cotire(celengine)
-#[[
-add_library(celengine SHARED ${CELENGINE_SOURCES})
-set_target_properties(celengine PROPERTIES
-  VERSION ${VERSION}
-  SOVERSION ${VERSION}
-)
-]]#
-add_dependencies(celengine cel3ds celmath celmodel)
-target_link_libraries(celengine cel3ds celmath celmodel)
-#install(TARGETS celengine LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
+add_library(celengine OBJECT ${CELENGINE_SOURCES})
+
+gperf_add_table(celengine location.gperf location.cpp 4)
+gperf_add_table(celengine solarsys.gperf solarsys.cpp 4)

@@ -8,77 +8,57 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#include <vector>
-#include "rendcontext.h"
-#include "texmanager.h"
-#include "modelgeometry.h"
+#include <algorithm>
+#include <cstddef>
+
+#include <celrender/gl/vertexobject.h>
+#include <celutil/color.h>
+#include <celutil/flag.h>
+#include "atmosphere.h"
 #include "body.h"
-#include <GL/glew.h>
-#include "vecgl.h"
+#include "lightenv.h"
+#include "rendcontext.h"
 #include "render.h"
+#include "shadowmap.h" // GL_ONLY_SHADOWS definition
+#include "texmanager.h"
+#include "texture.h"
 
-using namespace cmod;
-using namespace Eigen;
-using namespace std;
+namespace gl = celestia::gl;
+namespace util = celestia::util;
 
-
-static Material defaultMaterial;
-
-static GLenum GLPrimitiveModes[Mesh::PrimitiveTypeMax] =
+namespace
 {
-    GL_TRIANGLES,
-    GL_TRIANGLE_STRIP,
-    GL_TRIANGLE_FAN,
-    GL_LINES,
-    GL_LINE_STRIP,
-    GL_POINTS,
-    GL_POINTS,
+
+const cmod::Material defaultMaterial;
+
+constexpr gl::VertexObject::Primitive GLPrimitiveModes[static_cast<std::size_t>(cmod::PrimitiveGroupType::PrimitiveTypeMax)] =
+{
+    gl::VertexObject::Primitive::Triangles,
+    gl::VertexObject::Primitive::TriangleStrip,
+    gl::VertexObject::Primitive::TriangleFan,
+    gl::VertexObject::Primitive::Lines,
+    gl::VertexObject::Primitive::LineStrip,
+    gl::VertexObject::Primitive::Points,
+    gl::VertexObject::Primitive::Points
 };
 
-static GLenum GLComponentTypes[Mesh::FormatMax] =
+constexpr gl::VertexObject::Primitive
+convert(cmod::PrimitiveGroupType prim)
 {
-     GL_FLOAT,          // Float1
-     GL_FLOAT,          // Float2
-     GL_FLOAT,          // Float3
-     GL_FLOAT,          // Float4,
-     GL_UNSIGNED_BYTE,  // UByte4
-};
-
-static int GLComponentCounts[Mesh::FormatMax] =
-{
-     1,  // Float1
-     2,  // Float2
-     3,  // Float3
-     4,  // Float4,
-     4,  // UByte4
-};
-
-
-
-static void
-setStandardVertexArrays(const Mesh::VertexDescription& desc,
-                        const void* vertexData);
-static void
-setExtendedVertexArrays(const Mesh::VertexDescription& desc,
-                        const void* vertexData);
-
-
-static ResourceHandle
-GetTextureHandle(Material::TextureResource* texResource)
-{
-    CelestiaTextureResource* t = reinterpret_cast<CelestiaTextureResource*>(texResource);
-    return t ? t->textureHandle() : InvalidResource;
+    return GLPrimitiveModes[static_cast<std::size_t>(prim)];
 }
 
+} // end unnamed namespace
 
-RenderContext::RenderContext(const Renderer* _renderer) :
-    material(&defaultMaterial),
-    renderer(_renderer)
+
+RenderContext::RenderContext(Renderer* _renderer) :
+    renderer(_renderer),
+    material(&defaultMaterial)
 {
 }
 
 
-RenderContext::RenderContext(const Material* _material)
+RenderContext::RenderContext(const cmod::Material* _material)
 {
     if (_material == nullptr)
         material = &defaultMaterial;
@@ -87,7 +67,7 @@ RenderContext::RenderContext(const Material* _material)
 }
 
 
-const Material*
+const cmod::Material*
 RenderContext::getMaterial() const
 {
     return material;
@@ -95,7 +75,7 @@ RenderContext::getMaterial() const
 
 
 void
-RenderContext::setMaterial(const Material* newMaterial)
+RenderContext::setMaterial(const cmod::Material* newMaterial)
 {
     if (!locked)
     {
@@ -112,8 +92,8 @@ RenderContext::setMaterial(const Material* newMaterial)
         }
         else if (renderPass == EmissivePass)
         {
-            if (material->maps[Material::EmissiveMap] !=
-                newMaterial->maps[Material::EmissiveMap])
+            if (material->getMap(cmod::TextureSemantic::EmissiveMap) !=
+                newMaterial->getMap(cmod::TextureSemantic::EmissiveMap))
             {
                 material = newMaterial;
                 makeCurrent(*material);
@@ -138,13 +118,13 @@ RenderContext::getPointScale() const
 
 
 void
-RenderContext::setCameraOrientation(const Quaternionf& q)
+RenderContext::setCameraOrientation(const Eigen::Quaternionf& q)
 {
     cameraOrientation = q;
 }
 
 
-Quaternionf
+Eigen::Quaternionf
 RenderContext::getCameraOrientation() const
 {
     return cameraOrientation;
@@ -152,215 +132,140 @@ RenderContext::getCameraOrientation() const
 
 
 void
-RenderContext::drawGroup(const Mesh::PrimitiveGroup& group)
+RenderContext::drawGroup(gl::VertexObject &vao, const cmod::PrimitiveGroup& group)
 {
     // Skip rendering if this is the emissive pass but there's no
     // emissive texture.
-    ResourceHandle emissiveMap = GetTextureHandle(material->maps[Material::EmissiveMap]);
+    ResourceHandle emissiveMap = material->getMap(cmod::TextureSemantic::EmissiveMap);
 
     if (renderPass == EmissivePass && emissiveMap == InvalidResource)
     {
         return;
     }
 
-    if (group.prim == Mesh::SpriteList)
+#ifndef GL_ES
+    bool drawPoints = false;
+#endif
+    if (group.prim == cmod::PrimitiveGroupType::SpriteList || group.prim == cmod::PrimitiveGroupType::PointList)
     {
+        if (group.prim == cmod::PrimitiveGroupType::PointList)
+            glVertexAttrib1f(CelestiaGLProgram::PointSizeAttributeIndex, 1.0f);
+#ifndef GL_ES
+        drawPoints = true;
         glEnable(GL_POINT_SPRITE);
-        glActiveTexture(GL_TEXTURE0);
-        glTexEnvi(GL_POINT_SPRITE, GL_COORD_REPLACE, GL_TRUE);
         glEnable(GL_VERTEX_PROGRAM_POINT_SIZE);
+#endif
+        glActiveTexture(GL_TEXTURE0);
     }
 
-    glDrawElements(GLPrimitiveModes[(int) group.prim],
-                   group.nIndices,
-                   GL_UNSIGNED_INT,
-                   group.indices);
+    vao.draw(convert(group.prim), group.indicesCount, group.indicesOffset);
 
-    if (group.prim == Mesh::SpriteList)
+#ifndef GL_ES
+    if (drawPoints)
     {
         glDisable(GL_POINT_SPRITE);
         glDisable(GL_VERTEX_PROGRAM_POINT_SIZE);
     }
+#endif
 }
 
 
 void
-setStandardVertexArrays(const Mesh::VertexDescription& desc,
-                        const void* vertexData)
+RenderContext::updateShader(const cmod::VertexDescription& desc, cmod::PrimitiveGroupType primType)
 {
-    const Mesh::VertexAttribute& position  = desc.getAttribute(Mesh::Position);
-    const Mesh::VertexAttribute& normal    = desc.getAttribute(Mesh::Normal);
-    const Mesh::VertexAttribute& color0    = desc.getAttribute(Mesh::Color0);
-    const Mesh::VertexAttribute& texCoord0 = desc.getAttribute(Mesh::Texture0);
+    // Normally, the shader that will be used depends only on the material.
+    // But the presence of point size and normals can also affect the
+    // shader, so force an update of the material if those attributes appear
+    // or disappear in the new set of vertex arrays.
+    bool usePointSizeNow = (desc.getAttribute(cmod::VertexAttributeSemantic::PointSize).format
+                            == cmod::VertexAttributeFormat::Float1);
+    bool useNormalsNow = (desc.getAttribute(cmod::VertexAttributeSemantic::Normal).format
+                          == cmod::VertexAttributeFormat::Float3);
+    bool useColorsNow = (desc.getAttribute(cmod::VertexAttributeSemantic::Color0).format
+                         != cmod::VertexAttributeFormat::InvalidFormat);
+    bool useTexCoordsNow = (desc.getAttribute(cmod::VertexAttributeSemantic::Texture0).format
+                            != cmod::VertexAttributeFormat::InvalidFormat);
+    bool useStaticPointSizeNow = primType == cmod::PrimitiveGroupType::PointList;
 
-    // Can't render anything unless we have positions
-    if (position.format != Mesh::Float3)
-        return;
-
-    // Set up the vertex arrays
-    glEnableClientState(GL_VERTEX_ARRAY);
-    glVertexPointer(3, GL_FLOAT, desc.stride,
-                    reinterpret_cast<const char*>(vertexData) + position.offset);
-
-    // Set up the normal array
-    switch (normal.format)
+    if (usePointSizeNow         != usePointSize       ||
+        useStaticPointSizeNow   != useStaticPointSize ||
+        useNormalsNow           != useNormals         ||
+        useColorsNow            != useColors          ||
+        useTexCoordsNow         != useTexCoords)
     {
-    case Mesh::Float3:
-        glEnableClientState(GL_NORMAL_ARRAY);
-        glNormalPointer(GLComponentTypes[(int) normal.format],
-                        desc.stride,
-                        reinterpret_cast<const char*>(vertexData) + normal.offset);
-        break;
-    default:
-        glDisableClientState(GL_NORMAL_ARRAY);
-        break;
-    }
-
-    // Set up the color array
-    switch (color0.format)
-    {
-    case Mesh::Float3:
-    case Mesh::Float4:
-    case Mesh::UByte4:
-        glEnableClientState(GL_COLOR_ARRAY);
-        glColorPointer(GLComponentCounts[color0.format],
-                       GLComponentTypes[color0.format],
-                       desc.stride,
-                       reinterpret_cast<const char*>(vertexData) + color0.offset);
-        break;
-    default:
-        glDisableClientState(GL_COLOR_ARRAY);
-        break;
-    }
-
-    // Set up the texture coordinate array
-    switch (texCoord0.format)
-    {
-    case Mesh::Float1:
-    case Mesh::Float2:
-    case Mesh::Float3:
-    case Mesh::Float4:
-        glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-        glTexCoordPointer(GLComponentCounts[(int) texCoord0.format],
-                          GLComponentTypes[(int) texCoord0.format],
-                          desc.stride,
-                          reinterpret_cast<const char*>(vertexData) + texCoord0.offset);
-        break;
-    default:
-        glDisableClientState(GL_TEXTURE_COORD_ARRAY);
-        break;
-    }
-}
-
-
-void
-setExtendedVertexArrays(const Mesh::VertexDescription& desc,
-                        const void* vertexData)
-{
-    const Mesh::VertexAttribute& tangent  = desc.getAttribute(Mesh::Tangent);
-    const auto* vertices = reinterpret_cast<const char*>(vertexData);
-
-    switch (tangent.format)
-    {
-    case Mesh::Float3:
-        glEnableVertexAttribArray(CelestiaGLProgram::TangentAttributeIndex);
-        glVertexAttribPointer(CelestiaGLProgram::TangentAttributeIndex,
-                                      GLComponentCounts[(int) tangent.format],
-                                      GLComponentTypes[(int) tangent.format],
-                                      GL_FALSE,
-                                      desc.stride,
-                                      vertices + tangent.offset);
-        break;
-    default:
-        glDisableVertexAttribArray(CelestiaGLProgram::TangentAttributeIndex);
-        break;
-    }
-
-    const Mesh::VertexAttribute& pointsize = desc.getAttribute(Mesh::PointSize);
-    switch (pointsize.format)
-    {
-    case Mesh::Float1:
-        glEnableVertexAttribArray(CelestiaGLProgram::PointSizeAttributeIndex);
-        glVertexAttribPointer(CelestiaGLProgram::PointSizeAttributeIndex,
-                                      GLComponentCounts[(int) pointsize.format],
-                                      GLComponentTypes[(int) pointsize.format],
-                                      GL_FALSE,
-                                      desc.stride,
-                                      vertices + pointsize.offset);
-        break;
-    default:
-        glDisableVertexAttribArray(CelestiaGLProgram::PointSizeAttributeIndex);
-        break;
+        usePointSize = usePointSizeNow;
+        useStaticPointSize = useStaticPointSizeNow;
+        useNormals = useNormalsNow;
+        useColors = useColorsNow;
+        useTexCoords = useTexCoordsNow;
+        if (getMaterial() != nullptr)
+            makeCurrent(*getMaterial());
     }
 }
 
 
 /***** GLSL render context ******/
 
-GLSL_RenderContext::GLSL_RenderContext(const Renderer* renderer,
+GLSL_RenderContext::GLSL_RenderContext(Renderer* renderer,
                                        const LightingState& ls,
                                        float _objRadius,
-                                       const Quaternionf& orientation) :
+                                       const Eigen::Quaternionf& orientation,
+                                       const Eigen::Matrix4f* _modelViewMatrix,
+                                       const Eigen::Matrix4f* _projectionMatrix) :
     RenderContext(renderer),
     lightingState(ls),
     objRadius(_objRadius),
-    objScale(Vector3f::Constant(_objRadius)),
-    objOrientation(orientation)
+    objScale(Eigen::Vector3f::Constant(_objRadius)),
+    objOrientation(orientation),
+    modelViewMatrix(_modelViewMatrix),
+    projectionMatrix(_projectionMatrix)
 {
     initLightingEnvironment();
 }
 
 
-GLSL_RenderContext::GLSL_RenderContext(const Renderer* renderer,
+GLSL_RenderContext::GLSL_RenderContext(Renderer* renderer,
                                        const LightingState& ls,
                                        const Eigen::Vector3f& _objScale,
-                                       const Quaternionf& orientation) :
+                                       const Eigen::Quaternionf& orientation,
+                                       const Eigen::Matrix4f* _modelViewMatrix,
+                                       const Eigen::Matrix4f* _projectionMatrix) :
     RenderContext(renderer),
     lightingState(ls),
     objRadius(_objScale.maxCoeff()),
     objScale(_objScale),
-    objOrientation(orientation)
+    objOrientation(orientation),
+    modelViewMatrix(_modelViewMatrix),
+    projectionMatrix(_projectionMatrix)
 {
     initLightingEnvironment();
 }
 
 
-GLSL_RenderContext::~GLSL_RenderContext()
-{
-    glDisableClientState(GL_VERTEX_ARRAY);
-    glDisableClientState(GL_NORMAL_ARRAY);
-    glDisableClientState(GL_COLOR_ARRAY);
-    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
-    glDisableVertexAttribArray(CelestiaGLProgram::TangentAttributeIndex);
-    glDisableVertexAttribArray(CelestiaGLProgram::PointSizeAttributeIndex);
-}
-
+GLSL_RenderContext::~GLSL_RenderContext() = default;
 
 void
 GLSL_RenderContext::initLightingEnvironment()
 {
     // Set the light and shadow environment, which is constant for the entire model.
     // The material properties will be set per mesh.
-    shaderProps.nLights = min(lightingState.nLights, MaxShaderLights);
+    shaderProps.nLights = std::min(lightingState.nLights, MaxShaderLights);
 
     // Set the shadow information.
-    // Track the total number of shadows; if there are too many, we'll have
-    // to fall back to multipass.
-    unsigned int totalShadows = 0;
     for (unsigned int li = 0; li < lightingState.nLights; li++)
     {
         if (lightingState.shadows[li] && !lightingState.shadows[li]->empty())
         {
-            unsigned int nShadows = (unsigned int) min((size_t) MaxShaderEclipseShadows, lightingState.shadows[li]->size());
+            unsigned int nShadows = static_cast<unsigned int>(std::min(static_cast<std::size_t>(MaxShaderEclipseShadows),
+                                                                       lightingState.shadows[li]->size()));
             shaderProps.setEclipseShadowCountForLight(li, nShadows);
-            totalShadows += nShadows;
         }
     }
 
 }
 
 void
-GLSL_RenderContext::makeCurrent(const Material& m)
+GLSL_RenderContext::makeCurrent(const cmod::Material& m)
 {
     Texture* textures[4] = { nullptr, nullptr, nullptr, nullptr };
     unsigned int nTextures = 0;
@@ -371,14 +276,14 @@ GLSL_RenderContext::makeCurrent(const Material& m)
     Texture* specTex = nullptr;
     Texture* emissiveTex = nullptr;
 
-    shaderProps.texUsage = ShaderProperties::SharedTextureCoords;
+    shaderProps.texUsage = TexUsage::SharedTextureCoords;
 
     if (useNormals)
     {
         if (lunarLambert == 0.0f)
-            shaderProps.lightModel = ShaderProperties::DiffuseModel;
+            shaderProps.lightModel = LightingModel::DiffuseModel;
         else
-            shaderProps.lightModel = ShaderProperties::LunarLambertModel;
+            shaderProps.lightModel = LightingModel::LunarLambertModel;
     }
     else
     {
@@ -388,22 +293,22 @@ GLSL_RenderContext::makeCurrent(const Material& m)
         // eventually, a render context method will enable the particle
         // model.
         if (useColors)
-            shaderProps.lightModel = ShaderProperties::ParticleModel;
+            shaderProps.lightModel = LightingModel::ParticleModel;
         else
-            shaderProps.lightModel = ShaderProperties::ParticleDiffuseModel;
+            shaderProps.lightModel = LightingModel::ParticleDiffuseModel;
     }
 
-    ResourceHandle diffuseMap  = GetTextureHandle(m.maps[Material::DiffuseMap]);
-    ResourceHandle normalMap   = GetTextureHandle(m.maps[Material::NormalMap]);
-    ResourceHandle specularMap = GetTextureHandle(m.maps[Material::SpecularMap]);
-    ResourceHandle emissiveMap = GetTextureHandle(m.maps[Material::EmissiveMap]);
+    ResourceHandle diffuseMap  = m.getMap(cmod::TextureSemantic::DiffuseMap);
+    ResourceHandle normalMap   = m.getMap(cmod::TextureSemantic::NormalMap);
+    ResourceHandle specularMap = m.getMap(cmod::TextureSemantic::SpecularMap);
+    ResourceHandle emissiveMap = m.getMap(cmod::TextureSemantic::EmissiveMap);
 
     if (diffuseMap != InvalidResource && (useTexCoords || usePointSize))
     {
         baseTex = GetTextureManager()->find(diffuseMap);
         if (baseTex != nullptr)
         {
-            shaderProps.texUsage |= ShaderProperties::DiffuseTexture;
+            shaderProps.texUsage |= TexUsage::DiffuseTexture;
             textures[nTextures++] = baseTex;
         }
     }
@@ -413,27 +318,27 @@ GLSL_RenderContext::makeCurrent(const Material& m)
         bumpTex = GetTextureManager()->find(normalMap);
         if (bumpTex != nullptr)
         {
-            shaderProps.texUsage |= ShaderProperties::NormalTexture;
+            shaderProps.texUsage |= TexUsage::NormalTexture;
             if (bumpTex->getFormatOptions() & Texture::DXT5NormalMap)
             {
-                shaderProps.texUsage |= ShaderProperties::CompressedNormalTexture;
+                shaderProps.texUsage |= TexUsage::CompressedNormalTexture;
             }
             textures[nTextures++] = bumpTex;
         }
     }
 
-    if (m.specular != Material::Color(0.0f, 0.0f, 0.0f) && useNormals)
+    if (m.specular != cmod::Color(0.0f, 0.0f, 0.0f) && useNormals)
     {
-        shaderProps.lightModel = ShaderProperties::PerPixelSpecularModel;
+        shaderProps.lightModel = LightingModel::PerPixelSpecularModel;
         specTex = GetTextureManager()->find(specularMap);
         if (specTex == nullptr)
         {
             if (baseTex != nullptr)
-                shaderProps.texUsage |= ShaderProperties::SpecularInDiffuseAlpha;
+                shaderProps.texUsage |= TexUsage::SpecularInDiffuseAlpha;
         }
         else
         {
-            shaderProps.texUsage |= ShaderProperties::SpecularTexture;
+            shaderProps.texUsage |= TexUsage::SpecularTexture;
             textures[nTextures++] = specTex;
         }
     }
@@ -443,7 +348,7 @@ GLSL_RenderContext::makeCurrent(const Material& m)
         emissiveTex = GetTextureManager()->find(emissiveMap);
         if (emissiveTex != nullptr)
         {
-            shaderProps.texUsage |= ShaderProperties::EmissiveTexture;
+            shaderProps.texUsage |= TexUsage::EmissiveTexture;
             textures[nTextures++] = emissiveTex;
         }
     }
@@ -457,14 +362,27 @@ GLSL_RenderContext::makeCurrent(const Material& m)
             ringsTex->bind();
             textures[nTextures++] = ringsTex;
 
-            // Tweak the texture--set clamp to border and a border color with
-            // a zero alpha.
-            float bc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-            glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, bc);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+#ifdef GL_ES
+            if (celestia::gl::OES_texture_border_clamp)
+            {
+#endif
+                // Tweak the texture--set clamp to border and a border color with
+                // a zero alpha.
+                float bc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+#ifndef GL_ES
+                glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, bc);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+#else
+                glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR_OES, bc);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER_OES);
+#endif
+
+#ifdef GL_ES
+            }
+#endif
             glActiveTexture(GL_TEXTURE0);
 
-            shaderProps.texUsage |= ShaderProperties::RingShadowTexture;
+            shaderProps.texUsage |= TexUsage::RingShadowTexture;
             for (unsigned int lightIndex = 0; lightIndex < lightingState.nLights; lightIndex++)
             {
                 if (lightingState.lights[lightIndex].castsShadows &&
@@ -481,16 +399,23 @@ GLSL_RenderContext::makeCurrent(const Material& m)
     }
 
     if (usePointSize)
-        shaderProps.texUsage |= ShaderProperties::PointSprite;
+        shaderProps.texUsage |= TexUsage::PointSprite;
+    else if (useStaticPointSize)
+        shaderProps.texUsage |= TexUsage::StaticPointSize;
+
     if (useColors)
-        shaderProps.texUsage |= ShaderProperties::VertexColors;
+        shaderProps.texUsage |= TexUsage::VertexColors;
 
     if (atmosphere != nullptr)
     {
         // Only use new atmosphere code in OpenGL 2.0 path when new style parameters are defined.
         if (atmosphere->mieScaleHeight > 0.0f)
-            shaderProps.texUsage |= ShaderProperties::Scattering;
+            shaderProps.texUsage |= TexUsage::Scattering;
     }
+
+    bool hasShadowMap = shadowMap != 0 && shadowMapWidth != 0 && lightMatrix != nullptr;
+    if (hasShadowMap)
+        shaderProps.texUsage |= TexUsage::ShadowMapTexture;
 
     // Get a shader for the current rendering configuration
     assert(renderer != nullptr);
@@ -499,20 +424,30 @@ GLSL_RenderContext::makeCurrent(const Material& m)
         return;
 
     prog->use();
+    prog->setMVPMatrices(*projectionMatrix, *modelViewMatrix);
 
     for (unsigned int i = 0; i < nTextures; i++)
     {
         glActiveTexture(GL_TEXTURE0 + i);
-        glEnable(GL_TEXTURE_2D);
         textures[i]->bind();
     }
 
-    // setLightParameters() expects opacity in the alpha channel of the diffuse color
-#ifdef HDR_COMPRESS
-    Color diffuse(m.diffuse.red() * 0.5f, m.diffuse.green() * 0.5f, m.diffuse.blue() * 0.5f, m.opacity);
-#else
-    Color diffuse(m.diffuse.red(), m.diffuse.green(), m.diffuse.blue(), m.opacity);
+    if (hasShadowMap)
+    {
+        glActiveTexture(GL_TEXTURE0 + nTextures);
+        glBindTexture(GL_TEXTURE_2D, shadowMap);
+#if GL_ONLY_SHADOWS
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_R_TO_TEXTURE);
 #endif
+        Eigen::Matrix4f shadowBias(Eigen::Matrix4f::Zero());
+        shadowBias.diagonal() = Eigen::Vector4f(0.5f, 0.5f, 0.5f, 1.0f);
+        shadowBias.col(3) = Eigen::Vector4f(0.5f, 0.5f, 0.5f, 1.0f);
+        prog->ShadowMatrix0 = shadowBias * (*lightMatrix);
+        prog->floatParam("shadowMapSize") = static_cast<float>(shadowMapWidth);
+    }
+
+    // setLightParameters() expects opacity in the alpha channel of the diffuse color
+    Color diffuse(m.diffuse.red(), m.diffuse.green(), m.diffuse.blue(), m.opacity);
     Color specular(m.specular.red(), m.specular.green(), m.specular.blue());
     Color emissive(m.emissive.red(), m.emissive.green(), m.emissive.blue());
 
@@ -523,7 +458,7 @@ GLSL_RenderContext::makeCurrent(const Material& m)
 
     // TODO: handle emissive color
     prog->shininess = m.specularPower;
-    if (shaderProps.lightModel == ShaderProperties::LunarLambertModel)
+    if (shaderProps.lightModel == LightingModel::LunarLambertModel)
     {
         prog->lunarLambert = lunarLambert;
     }
@@ -542,19 +477,23 @@ GLSL_RenderContext::makeCurrent(const Material& m)
         disableDepthWriteOnBlend = false;
     }
 
-    if ((shaderProps.texUsage & ShaderProperties::PointSprite) != 0)
+    if (usePointSize)
     {
         prog->pointScale = getPointScale();
     }
+    else if (useStaticPointSize)
+    {
+        prog->pointScale = renderer->getScreenDpi() / 96.0f;
+    }
 
     // Ring shadow parameters
-    if ((shaderProps.texUsage & ShaderProperties::RingShadowTexture) != 0)
+    if (util::is_set(shaderProps.texUsage, TexUsage::RingShadowTexture))
     {
         const RingSystem* rings = lightingState.shadowingRingSystem;
         float ringWidth = rings->outerRadius - rings->innerRadius;
         prog->ringRadius = rings->innerRadius / objRadius;
         prog->ringWidth = objRadius / ringWidth;
-        prog->ringPlane = Hyperplane<float, 3>(lightingState.ringPlaneNormal, lightingState.ringCenter / objRadius).coeffs();
+        prog->ringPlane = Eigen::Hyperplane<float, 3>(lightingState.ringPlaneNormal, lightingState.ringCenter / objRadius).coeffs();
         prog->ringCenter = lightingState.ringCenter / objRadius;
 
         for (unsigned int lightIndex = 0; lightIndex < lightingState.nLights; ++lightIndex)
@@ -566,9 +505,9 @@ GLSL_RenderContext::makeCurrent(const Material& m)
         }
     }
 
-    Material::BlendMode newBlendMode = Material::InvalidBlend;
+    cmod::BlendMode newBlendMode = cmod::BlendMode::InvalidBlend;
     if (m.opacity != 1.0f ||
-        m.blend == Material::AdditiveBlend ||
+        m.blend == cmod::BlendMode::AdditiveBlend ||
         (baseTex != nullptr && baseTex->hasAlpha()))
     {
         newBlendMode = m.blend;
@@ -577,59 +516,30 @@ GLSL_RenderContext::makeCurrent(const Material& m)
     if (newBlendMode != blendMode)
     {
         blendMode = newBlendMode;
+        Renderer::PipelineState ps;
+        ps.depthTest = true;
         switch (blendMode)
         {
-        case Material::NormalBlend:
-            glEnable(GL_BLEND);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-            glDepthMask(disableDepthWriteOnBlend ? GL_FALSE : GL_TRUE);
+        case cmod::BlendMode::NormalBlend:
+            ps.blending = true;
+            ps.blendFunc = {GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA};
+            ps.depthMask = !disableDepthWriteOnBlend;
             break;
-        case Material::AdditiveBlend:
-            glEnable(GL_BLEND);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-            glDepthMask(disableDepthWriteOnBlend ? GL_FALSE : GL_TRUE);
+        case cmod::BlendMode::AdditiveBlend:
+            ps.blending = true;
+            ps.blendFunc = {GL_SRC_ALPHA, GL_ONE};
+            ps.depthMask = !disableDepthWriteOnBlend;
             break;
-        case Material::PremultipliedAlphaBlend:
-            glEnable(GL_BLEND);
-            glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-            glDepthMask(disableDepthWriteOnBlend ? GL_FALSE : GL_TRUE);
+        case cmod::BlendMode::PremultipliedAlphaBlend:
+            ps.blending = true;
+            ps.blendFunc = {GL_ONE, GL_ONE_MINUS_SRC_ALPHA};
+            ps.depthMask = !disableDepthWriteOnBlend;
             break;
         default:
-            glDisable(GL_BLEND);
-            glDepthMask(GL_TRUE);
+            ps.depthMask = true;
             break;
         }
-    }
-}
-
-
-void
-GLSL_RenderContext::setVertexArrays(const Mesh::VertexDescription& desc,
-                                    const void* vertexData)
-{
-    setStandardVertexArrays(desc, vertexData);
-    setExtendedVertexArrays(desc, vertexData);
-
-    // Normally, the shader that will be used depends only on the material.
-    // But the presence of point size and normals can also affect the
-    // shader, so force an update of the material if those attributes appear
-    // or disappear in the new set of vertex arrays.
-    bool usePointSizeNow = (desc.getAttribute(Mesh::PointSize).format == Mesh::Float1);
-    bool useNormalsNow = (desc.getAttribute(Mesh::Normal).format == Mesh::Float3);
-    bool useColorsNow = (desc.getAttribute(Mesh::Color0).format != Mesh::InvalidFormat);
-    bool useTexCoordsNow = (desc.getAttribute(Mesh::Texture0).format != Mesh::InvalidFormat);
-
-    if (usePointSizeNow != usePointSize ||
-        useNormalsNow   != useNormals   ||
-        useColorsNow    != useColors    ||
-        useTexCoordsNow != useTexCoords)
-    {
-        usePointSize = usePointSizeNow;
-        useNormals = useNormalsNow;
-        useColors = useColorsNow;
-        useTexCoords = useTexCoordsNow;
-        if (getMaterial() != nullptr)
-            makeCurrent(*getMaterial());
+        renderer->setPipelineState(ps);
     }
 }
 
@@ -647,27 +557,31 @@ GLSL_RenderContext::setLunarLambert(float l)
     lunarLambert = l;
 }
 
+void
+GLSL_RenderContext::setShadowMap(GLuint _shadowMap, GLuint _width, const Eigen::Matrix4f *_lightMatrix)
+{
+    shadowMap      = _shadowMap;
+    shadowMapWidth = _width;
+    lightMatrix    = _lightMatrix;
+}
 
 /***** GLSL-Unlit render context ******/
 
-GLSLUnlit_RenderContext::GLSLUnlit_RenderContext(const Renderer* renderer, float _objRadius) :
+GLSLUnlit_RenderContext::GLSLUnlit_RenderContext(Renderer* renderer,
+                                                 float _objRadius,
+                                                 const Eigen::Matrix4f* _modelViewMatrix,
+                                                 const Eigen::Matrix4f* _projectionMatrix) :
     RenderContext(renderer),
-    blendMode(Material::InvalidBlend),
-    objRadius(_objRadius)
+    blendMode(cmod::BlendMode::InvalidBlend),
+    objRadius(_objRadius),
+    modelViewMatrix(_modelViewMatrix),
+    projectionMatrix(_projectionMatrix)
 {
     initLightingEnvironment();
 }
 
 
-GLSLUnlit_RenderContext::~GLSLUnlit_RenderContext()
-{
-    glDisableClientState(GL_VERTEX_ARRAY);
-    glDisableClientState(GL_NORMAL_ARRAY);
-    glDisableClientState(GL_COLOR_ARRAY);
-    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
-    glDisableVertexAttribArray(CelestiaGLProgram::TangentAttributeIndex);
-    glDisableVertexAttribArray(CelestiaGLProgram::PointSizeAttributeIndex);
-}
+GLSLUnlit_RenderContext::~GLSLUnlit_RenderContext() = default;
 
 
 void
@@ -680,7 +594,7 @@ GLSLUnlit_RenderContext::initLightingEnvironment()
 
 
 void
-GLSLUnlit_RenderContext::makeCurrent(const Material& m)
+GLSLUnlit_RenderContext::makeCurrent(const cmod::Material& m)
 {
     Texture* textures[4] = { nullptr, nullptr, nullptr, nullptr };
     unsigned int nTextures = 0;
@@ -688,24 +602,27 @@ GLSLUnlit_RenderContext::makeCurrent(const Material& m)
     // Set up the textures used by this object
     Texture* baseTex = nullptr;
 
-    shaderProps.lightModel = ShaderProperties::EmissiveModel;
-    shaderProps.texUsage = ShaderProperties::SharedTextureCoords;
+    shaderProps.lightModel = LightingModel::EmissiveModel;
+    shaderProps.texUsage = TexUsage::SharedTextureCoords;
 
-    ResourceHandle diffuseMap = GetTextureHandle(m.maps[Material::DiffuseMap]);
+    ResourceHandle diffuseMap = m.getMap(cmod::TextureSemantic::DiffuseMap);
     if (diffuseMap != InvalidResource && (useTexCoords || usePointSize))
     {
         baseTex = GetTextureManager()->find(diffuseMap);
         if (baseTex != nullptr)
         {
-            shaderProps.texUsage |= ShaderProperties::DiffuseTexture;
+            shaderProps.texUsage |= TexUsage::DiffuseTexture;
             textures[nTextures++] = baseTex;
         }
     }
 
     if (usePointSize)
-        shaderProps.texUsage |= ShaderProperties::PointSprite;
+        shaderProps.texUsage |= TexUsage::PointSprite;
+    else if (useStaticPointSize)
+        shaderProps.texUsage |= TexUsage::StaticPointSize;
+
     if (useColors)
-        shaderProps.texUsage |= ShaderProperties::VertexColors;
+        shaderProps.texUsage |= TexUsage::VertexColors;
 
     // Get a shader for the current rendering configuration
     assert(renderer != nullptr);
@@ -714,29 +631,29 @@ GLSLUnlit_RenderContext::makeCurrent(const Material& m)
         return;
 
     prog->use();
+    prog->setMVPMatrices(*projectionMatrix, *modelViewMatrix);
 
     for (unsigned int i = 0; i < nTextures; i++)
     {
         glActiveTexture(GL_TEXTURE0 + i);
-        glEnable(GL_TEXTURE_2D);
         textures[i]->bind();
     }
 
-#ifdef HDR_COMPRESS
-    prog->lights[0].diffuse = m.diffuse.toVector3() * 0.5f;
-#else
     prog->lights[0].diffuse = m.diffuse.toVector3();
-#endif
     prog->opacity = m.opacity;
 
-    if ((shaderProps.texUsage & ShaderProperties::PointSprite) != 0)
+    if (usePointSize)
     {
         prog->pointScale = getPointScale();
     }
+    else if (useStaticPointSize)
+    {
+        prog->pointScale = renderer->getScreenDpi() / 96.0f;
+    }
 
-    Material::BlendMode newBlendMode = Material::InvalidBlend;
+    cmod::BlendMode newBlendMode = cmod::BlendMode::InvalidBlend;
     if (m.opacity != 1.0f ||
-        m.blend == Material::AdditiveBlend ||
+        m.blend == cmod::BlendMode::AdditiveBlend ||
         (baseTex != nullptr && baseTex->hasAlpha()))
     {
         newBlendMode = m.blend;
@@ -745,58 +662,26 @@ GLSLUnlit_RenderContext::makeCurrent(const Material& m)
     if (newBlendMode != blendMode)
     {
         blendMode = newBlendMode;
+        Renderer::PipelineState ps;
+        ps.depthTest = true;
         switch (blendMode)
         {
-        case Material::NormalBlend:
-            glEnable(GL_BLEND);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-            glDepthMask(GL_FALSE);
+        case cmod::BlendMode::NormalBlend:
+            ps.blending = true;
+            ps.blendFunc = {GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA};
             break;
-        case Material::AdditiveBlend:
-            glEnable(GL_BLEND);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-            glDepthMask(GL_FALSE);
+        case cmod::BlendMode::AdditiveBlend:
+            ps.blending = true;
+            ps.blendFunc = {GL_SRC_ALPHA, GL_ONE};
             break;
-        case Material::PremultipliedAlphaBlend:
-            glEnable(GL_BLEND);
-            glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-            glDepthMask(GL_FALSE);
+        case cmod::BlendMode::PremultipliedAlphaBlend:
+            ps.blending = true;
+            ps.blendFunc = {GL_ONE, GL_ONE_MINUS_SRC_ALPHA};
             break;
         default:
-            glDisable(GL_BLEND);
-            glDepthMask(GL_TRUE);
+            ps.depthMask = true;
             break;
         }
-    }
-}
-
-
-void
-GLSLUnlit_RenderContext::setVertexArrays(const Mesh::VertexDescription& desc,
-                                         const void* vertexData)
-{
-    setStandardVertexArrays(desc, vertexData);
-    setExtendedVertexArrays(desc, vertexData);
-
-    // Normally, the shader that will be used depends only on the material.
-    // But the presence of point size and normals can also affect the
-    // shader, so force an update of the material if those attributes appear
-    // or disappear in the new set of vertex arrays.
-    bool usePointSizeNow = (desc.getAttribute(Mesh::PointSize).format == Mesh::Float1);
-    bool useNormalsNow = (desc.getAttribute(Mesh::Normal).format == Mesh::Float3);
-    bool useColorsNow = (desc.getAttribute(Mesh::Color0).format != Mesh::InvalidFormat);
-    bool useTexCoordsNow = (desc.getAttribute(Mesh::Texture0).format != Mesh::InvalidFormat);
-
-    if (usePointSizeNow != usePointSize ||
-        useNormalsNow   != useNormals   ||
-        useColorsNow    != useColors    ||
-        useTexCoordsNow != useTexCoords)
-    {
-        usePointSize = usePointSizeNow;
-        useNormals = useNormalsNow;
-        useColors = useColorsNow;
-        useTexCoords = useTexCoordsNow;
-        if (getMaterial() != nullptr)
-            makeCurrent(*getMaterial());
+        renderer->setPipelineState(ps);
     }
 }

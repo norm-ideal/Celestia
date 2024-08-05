@@ -10,13 +10,14 @@
  *  $Id: actions.h,v 1.7 2008-01-21 04:55:19 suwalski Exp $
  */
 
-#ifndef GTK_ACTIONS_H
-#define GTK_ACTIONS_H
+#pragma once
 
 #include <gtk/gtk.h>
 
 #include "common.h"
 
+namespace celestia::gtk
+{
 
 /* Main Actions */
 void actionCopyURL(GtkAction*, AppData*);
@@ -49,7 +50,6 @@ void actionFullScreen(GtkAction*, AppData*);
 void actionViewOptions(GtkAction*, AppData*);
 void actionStarsMore(GtkAction*, AppData*);
 void actionStarsFewer(GtkAction*, AppData*);
-void actionVideoSync(GtkToggleAction*, AppData*);
 void actionMenuBarVisible(GtkToggleAction*, AppData*);
 void actionMultiSplitH(GtkAction*, AppData*);
 void actionMultiSplitV(GtkAction*, AppData*);
@@ -89,6 +89,7 @@ void actionRenderNebulae(GtkToggleAction*, AppData*);
 void actionRenderNightLights(GtkToggleAction*, AppData*);
 void actionRenderOpenClusters(GtkToggleAction*, AppData*);
 void actionRenderOrbits(GtkToggleAction*, AppData*);
+void actionRenderFadingOrbits(GtkToggleAction*, AppData*);
 void actionRenderPlanets(GtkToggleAction*, AppData*);
 void actionRenderDwarfPlanets(GtkToggleAction*, AppData*);
 void actionRenderMoons(GtkToggleAction*, AppData*);
@@ -96,6 +97,7 @@ void actionRenderMinorMoons(GtkToggleAction*, AppData*);
 void actionRenderAsteroids(GtkToggleAction*, AppData*);
 void actionRenderComets(GtkToggleAction*, AppData*);
 void actionRenderSpacecrafts(GtkToggleAction*, AppData*);
+void actionRenderPlanetRings(GtkToggleAction*, AppData*);
 void actionRenderRingShadows(GtkToggleAction*, AppData*);
 void actionRenderStars(GtkToggleAction*, AppData*);
 
@@ -133,13 +135,7 @@ void resyncStarStyleActions(AppData* app);
 void resyncGalaxyGainActions(AppData* app);
 void resyncTextureResolutionActions(AppData* app);
 
-
 /* Information for the about box */
-#ifdef GNOME
-#define FRONTEND "GNOME"
-#else
 #define FRONTEND "GTK+"
-#endif
 
-
-#endif /* GTK_ACTIONS_H */
+} // end namespace celestia::gtk

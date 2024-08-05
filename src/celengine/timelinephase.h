@@ -10,23 +10,30 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#ifndef _CELENGINE_TIMELINEPHASE_H_
-#define _CELENGINE_TIMELINEPHASE_H_
+#pragma once
 
-class ReferenceFrame;
-class Orbit;
-class RotationModel;
+#include <memory>
+#include "frame.h"
+
 class FrameTree;
 class Universe;
 class Body;
 
+namespace celestia::ephem
+{
+class Orbit;
+class RotationModel;
+}
+
 
 class TimelinePhase
 {
-public:
-    int addRef() const;
-    int release() const;
+private:
+    struct CreateToken {};
 
+public:
+    using SharedPtr = std::shared_ptr<TimelinePhase>;
+    using SharedConstPtr = std::shared_ptr<const TimelinePhase>;
     Body* body() const
     {
         return m_body;
@@ -42,22 +49,22 @@ public:
         return m_endTime;
     }
 
-    ReferenceFrame* orbitFrame() const
+    const ReferenceFrame::SharedConstPtr& orbitFrame() const
     {
         return m_orbitFrame;
     }
 
-    Orbit* orbit() const
+    const std::shared_ptr<const celestia::ephem::Orbit>& orbit() const
     {
         return m_orbit;
     }
 
-    ReferenceFrame* bodyFrame() const
+    const ReferenceFrame::SharedConstPtr& bodyFrame() const
     {
         return m_bodyFrame;
     }
 
-    RotationModel* rotationModel() const
+    const std::shared_ptr<const celestia::ephem::RotationModel>& rotationModel() const
     {
         return m_rotationModel;
     }
@@ -78,33 +85,28 @@ public:
         return m_startTime <= t && t < m_endTime;
     }
 
-    static TimelinePhase* CreateTimelinePhase(Universe& universe,
-                                              Body* body,
-                                              double startTime,
-                                              double endTime,
-                                              ReferenceFrame& orbitFrame,
-                                              Orbit& orbit,
-                                              ReferenceFrame& bodyFrame,
-                                              RotationModel& rotationModel);
+    static TimelinePhase::SharedConstPtr CreateTimelinePhase(Universe& universe,
+                                                             Body* body,
+                                                             double startTime,
+                                                             double endTime,
+                                                             const ReferenceFrame::SharedConstPtr& orbitFrame,
+                                                             const std::shared_ptr<const celestia::ephem::Orbit>& orbit,
+                                                             const ReferenceFrame::SharedConstPtr& bodyFrame,
+                                                             const std::shared_ptr<const celestia::ephem::RotationModel>& rotationModel);
 
-private:
-    // Private constructor; phases can only created with the
-    // createTimelinePhase factory method.
-    TimelinePhase(Body* _body,
+    TimelinePhase(CreateToken,
+                  Body* _body,
                   double _startTime,
                   double _endTime,
-                  ReferenceFrame* _orbitFrame,
-                  Orbit* _orbit,
-                  ReferenceFrame* _bodyFrame,
-                  RotationModel* _rotationModel,
+                  const ReferenceFrame::SharedConstPtr& _orbitFrame,
+                  const std::shared_ptr<const celestia::ephem::Orbit>& _orbit,
+                  const ReferenceFrame::SharedConstPtr& _bodyFrame,
+                  const std::shared_ptr<const celestia::ephem::RotationModel>& _rotationModel,
                   FrameTree* _owner);
+    ~TimelinePhase() = default;
 
-    // Private copy constructor and assignment operator; should never be used.
-    TimelinePhase(const TimelinePhase& phase);
-    TimelinePhase& operator=(const TimelinePhase& phase);
-
-    // TimelinePhases are refCounted; use release() instead.
-    ~TimelinePhase();
+    TimelinePhase(const TimelinePhase& phase) = delete;
+    TimelinePhase& operator=(const TimelinePhase& phase) = delete;
 
 private:
     Body* m_body;
@@ -112,14 +114,10 @@ private:
     double m_startTime;
     double m_endTime;
 
-    ReferenceFrame* m_orbitFrame;
-    Orbit* m_orbit;
-    ReferenceFrame* m_bodyFrame;
-    RotationModel* m_rotationModel;
+    ReferenceFrame::SharedConstPtr m_orbitFrame;
+    std::shared_ptr<const celestia::ephem::Orbit> m_orbit;
+    ReferenceFrame::SharedConstPtr m_bodyFrame;
+    std::shared_ptr<const celestia::ephem::RotationModel> m_rotationModel;
 
     FrameTree* m_owner;
-
-    mutable int refCount;
 };
-
-#endif // _CELENGINE_TIMELINEPHASE_H_

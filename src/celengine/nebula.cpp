@@ -7,112 +7,85 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#include "celestia.h"
-#include "vecgl.h"
-#include "render.h"
-#include "astro.h"
-#include "nebula.h"
-#include "meshmanager.h"
-#include "rendcontext.h"
-#include <celmath/mathlib.h>
-#include <celutil/util.h>
-#include <celutil/debug.h>
 #include <algorithm>
+#include <celmath/mathlib.h>
+#include <celmath/vecgl.h>
+#include <celutil/fsutils.h>
+#include <celutil/logger.h>
+#include <celutil/gettext.h>
+#include "hash.h"
+#include "meshmanager.h"
+#include "nebula.h"
+#include "rendcontext.h"
+#include "render.h"
 
-using namespace Eigen;
-using namespace std;
+namespace engine = celestia::engine;
+namespace util = celestia::util;
+using util::GetLogger;
 
-
-const char* Nebula::getType() const
+const char*
+Nebula::getType() const
 {
     return "Nebula";
 }
 
-
-void Nebula::setType(const string& /*typeStr*/)
+void
+Nebula::setType(const std::string& /*typeStr*/)
 {
 }
 
-
-string Nebula::getDescription() const
+std::string
+Nebula::getDescription() const
 {
     return _("Nebula");
 }
 
-
-ResourceHandle Nebula::getGeometry() const
+ResourceHandle
+Nebula::getGeometry() const
 {
     return geometry;
 }
 
-
-void Nebula::setGeometry(ResourceHandle _geometry)
+void
+Nebula::setGeometry(ResourceHandle _geometry)
 {
     geometry = _geometry;
 }
 
-const char* Nebula::getObjTypeName() const
+DeepSkyObjectType
+Nebula::getObjType() const
 {
-    return "nebula";
+    return DeepSkyObjectType::Nebula;
 }
 
-
-bool Nebula::pick(const Ray3d& ray,
-                  double& distanceToPicker,
-                  double& cosAngleToBoundCenter) const
+bool
+Nebula::load(const AssociativeArray* params, const fs::path& resPath)
 {
-    // The preconditional sphere-ray intersection test is enough for now:
-    return DeepSkyObject::pick(ray, distanceToPicker, cosAngleToBoundCenter);
-}
-
-
-bool Nebula::load(AssociativeArray* params, const string& resPath)
-{
-    string geometryFileName;
-    if (params->getString("Mesh", geometryFileName))
+    if (const std::string* t = params->getString("Mesh"); t != nullptr)
     {
+        auto geometryFileName = util::U8FileName(*t);
+        if (!geometryFileName.has_value())
+        {
+            GetLogger()->error("Invalid filename in Mesh\n");
+            return false;
+        }
+
         ResourceHandle geometryHandle =
-            GetGeometryManager()->getHandle(GeometryInfo(geometryFileName, resPath));
+            engine::GetGeometryManager()->getHandle(engine::GeometryInfo(*geometryFileName, resPath));
         setGeometry(geometryHandle);
     }
 
     return DeepSkyObject::load(params, resPath);
 }
 
-
-void Nebula::render(const Vector3f& /*unused*/,
-                    const Quaternionf& /*unused*/,
-                    float /*unused*/,
-                    float pixelSize,
-                    const Renderer* renderer)
-{
-    Geometry* g = nullptr;
-    if (geometry != InvalidResource)
-        g = GetGeometryManager()->find(geometry);
-    if (g == nullptr)
-        return;
-
-    glDisable(GL_BLEND);
-
-    glScalef(getRadius(), getRadius(), getRadius());
-    glRotate(getOrientation());
-
-    GLSLUnlit_RenderContext rc(renderer, getRadius());
-    rc.setPointScale(2.0f * getRadius() / pixelSize);
-    g->render(rc);
-    glUseProgram(0);
-
-    glEnable(GL_BLEND);
-}
-
-
-unsigned int Nebula::getRenderMask() const
+std::uint64_t
+Nebula::getRenderMask() const
 {
     return Renderer::ShowNebulae;
 }
 
-
-unsigned int Nebula::getLabelMask() const
+unsigned int
+Nebula::getLabelMask() const
 {
     return Renderer::NebulaLabels;
 }

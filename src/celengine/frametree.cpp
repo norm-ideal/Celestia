@@ -16,7 +16,6 @@
 #include "celengine/timeline.h"
 #include "celengine/timelinephase.h"
 #include "celengine/frame.h"
-#include <celengine/body.h>
 #include <celengine/star.h>
 #include <celengine/location.h>
 #include <celengine/deepskyobj.h>
@@ -41,18 +40,18 @@
  * object will all cause the tree to be marked as changed.
  */
 
+using namespace std;
+
 /*! Create a frame tree associated with a star.
  */
 FrameTree::FrameTree(Star* star) :
     starParent(star),
     bodyParent(nullptr),
     m_changed(true),
-    defaultFrame(nullptr)
-{
     // Default frame for a star is J2000 ecliptical, centered
     // on the star.
-    defaultFrame = new J2000EclipticFrame(Selection(star));
-    defaultFrame->addRef();
+    defaultFrame(new J2000EclipticFrame(Selection(star)))
+{
 }
 
 
@@ -62,24 +61,16 @@ FrameTree::FrameTree(Body* body) :
     starParent(nullptr),
     bodyParent(body),
     m_changed(true),
-    defaultFrame(nullptr)
-{
     // Default frame for a solar system body is the mean equatorial frame of the body.
-    defaultFrame = new BodyMeanEquatorFrame(Selection(body), Selection(body));
-    defaultFrame->addRef();
-}
-
-
-FrameTree::~FrameTree()
+    defaultFrame(new BodyMeanEquatorFrame(Selection(body), Selection(body)))
 {
-    defaultFrame->release();
 }
 
 
 /*! Return the default reference frame for the object a frame tree is associated
  *  with.
  */
-ReferenceFrame*
+const ReferenceFrame::SharedConstPtr&
 FrameTree::getDefaultReferenceFrame() const
 {
     return defaultFrame;
@@ -111,7 +102,7 @@ FrameTree::markUpdated()
     if (m_changed)
     {
         m_changed = false;
-        for (const auto child : children)
+        for (const auto &child : children)
             child->body()->markUpdated();
     }
 }
@@ -131,9 +122,9 @@ FrameTree::recomputeBoundingSphere()
         m_boundingSphereRadius = 0.0;
         m_maxChildRadius = 0.0;
         m_containsSecondaryIlluminators = false;
-        m_childClassMask = 0;
+        m_childClassMask = BodyClassification::EmptyMask;
 
-        for (const auto phase : children)
+        for (const auto &phase : children)
         {
             double bodyRadius = phase->body()->getRadius();
             double r = phase->body()->getCullingRadius() + phase->orbit()->getBoundingRadius();
@@ -160,9 +151,8 @@ FrameTree::recomputeBoundingSphere()
 /*! Add a new phase to this tree.
  */
 void
-FrameTree::addChild(TimelinePhase* phase)
+FrameTree::addChild(const TimelinePhase::SharedConstPtr &phase)
 {
-    phase->addRef();
     children.push_back(phase);
     markChanged();
 }
@@ -172,12 +162,11 @@ FrameTree::addChild(TimelinePhase* phase)
  *  phase doesn't exist in the tree.
  */
 void
-FrameTree::removeChild(TimelinePhase* phase)
+FrameTree::removeChild(const TimelinePhase::SharedConstPtr &phase)
 {
-    vector<TimelinePhase*>::iterator iter = find(children.begin(), children.end(), phase);
+    auto iter = find(children.begin(), children.end(), phase);
     if (iter != children.end())
     {
-        (*iter)->release();
         children.erase(iter);
         markChanged();
     }
@@ -185,10 +174,10 @@ FrameTree::removeChild(TimelinePhase* phase)
 
 
 /*! Return the child at the specified index. */
-TimelinePhase*
+const TimelinePhase*
 FrameTree::getChild(unsigned int n) const
 {
-    return children[n];
+    return children[n].get();
 }
 
 

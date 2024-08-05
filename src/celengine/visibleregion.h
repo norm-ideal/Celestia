@@ -10,8 +10,7 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#ifndef _CELENGINE_VISIBLEREGION_H_
-#define _CELENGINE_VISIBLEREGION_H_
+#pragma once
 
 #include <celengine/referencemark.h>
 #include <celengine/selection.h>
@@ -33,8 +32,9 @@ public:
     void render(Renderer* renderer,
                 const Eigen::Vector3f& pos,
                 float discSizeInPixels,
-                double tdb) const;
-    float boundingSphereRadius() const;
+                double tdb,
+                const Matrices& m) const override;
+    float boundingSphereRadius() const override;
 
     Color color() const;
     void setColor(Color color);
@@ -47,6 +47,3 @@ private:
     Color m_color;
     float m_opacity;
 };
-
-#endif // _CELENGINE_TERMINATOR_H_
-

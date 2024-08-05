@@ -10,29 +10,21 @@
  *  $Id: splash.h,v 1.1 2006-01-01 23:43:52 suwalski Exp $
  */
 
-#ifndef GTK_SPLASH_H
-#define GTK_SPLASH_H
+#pragma once
+
+#include <string>
 
 #include "common.h"
 
+#include <celestia/progressnotifier.h>
 
-typedef struct _SplashData SplashData;
-
-/* This class overrides the ProgressNotifier to receive splash event updates
- * from the core. */
-class GtkSplashProgressNotifier : public ProgressNotifier
+namespace celestia::gtk
 {
-    public:
-        GtkSplashProgressNotifier(SplashData* _splash);
-        virtual ~GtkSplashProgressNotifier();
 
-        virtual void update(const string& filename);
-
-    private:
-        SplashData* splash;
-};
+class GtkSplashProgressNotifier;
 
 /* Struct holds all information relevant to the splash screen. */
+typedef struct _SplashData SplashData;
 struct _SplashData {
     AppData* app;
 
@@ -45,11 +37,23 @@ struct _SplashData {
     gboolean redraw;
 };
 
+/* This class overrides the ProgressNotifier to receive splash event updates
+ * from the core. */
+class GtkSplashProgressNotifier : public ProgressNotifier
+{
+    public:
+        GtkSplashProgressNotifier(SplashData* _splash);
+        virtual ~GtkSplashProgressNotifier();
+
+        virtual void update(const std::string& filename);
+
+    private:
+        SplashData* splash;
+};
 
 /* Entry Functions */
-SplashData* splashStart(AppData* app, gboolean showSplash);
+SplashData* splashStart(AppData* app, gboolean showSplash, const gchar* installDir, const gchar* defaultDir);
 void splashEnd(SplashData* ss);
 void splashSetText(SplashData* ss, const char* text);
 
-
-#endif /* GTK_SPLASH_H */
+} // end namespace celestia::gtk

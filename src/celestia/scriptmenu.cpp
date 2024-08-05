@@ -10,94 +10,122 @@
 // of the License, or (at your option) any later version.
 
 #include "scriptmenu.h"
-#include "celutil/directory.h"
-#include "celutil/filetype.h"
+
+#include <algorithm>
+#include <array>
 #include <fstream>
+#include <string_view>
 
-using namespace std;
+#include <celutil/filetype.h>
+#include <celutil/gettext.h>
+#include <celutil/logger.h>
 
+using namespace std::string_view_literals;
+using celestia::util::GetLogger;
 
-static const char TitleTag[] = "Title:";
-
-class ScriptScanner : public EnumFilesHandler
+namespace
 {
-public:
-    ScriptScanner() = default;
 
-    bool process(const string& filename)
-    {
-        if (
-#ifdef CELX
-            DetermineFileType(filename) == Content_CelestiaScript ||
+constexpr std::string_view TitleTag = "Title:"sv;
+
+
+
+void process(const fs::path& p, std::vector<ScriptMenuItem>& menuItems)
+{
+    auto type = DetermineFileType(p);
+#ifndef CELX
+    if (type != ContentType::CelestiaLegacyScript)
+#else
+    if (type != ContentType::CelestiaScript &&
+        type != ContentType::CelestiaLegacyScript)
 #endif
-            DetermineFileType(filename) == Content_CelestiaLegacyScript
-            )
-        {
-            string filepath = getPath() + string("/") + filename;
+        return;
 
-            // Scan the script file for metainformation. At the moment,
-            // the only thing searched for is the script title, which must
-            // appear on the first line after the string 'Title:'
-            ifstream in(filepath);
-            if (in.good())
-            {
-                ScriptMenuItem item;
-                item.filename = filepath;
+    // Scan the script file for metainformation. At the moment,
+    // the only thing searched for is the script title, which must
+    // appear on the first line after the string 'Title:'
+    std::ifstream in(p);
+    if (!in.good())
+        return;
 
-                // Read the first line, handling various newline conventions
-                char firstLineBuf[512];
-                unsigned int count = 0;
-                while (count < sizeof(firstLineBuf) - 1 && in.good())
-                {
-                    int c = in.get();
-                    if (c == '\n' || c == '\r')
-                        break;
-                    firstLineBuf[count++] = c;
-                }
+    ScriptMenuItem& item = menuItems.emplace_back();
+    item.title = p.filename().string();
+    item.filename = p;
 
-                string firstLine(firstLineBuf, count);
-                string::size_type titlePos = firstLine.find(TitleTag);
+    // Read the first line, handling various newline conventions
+    std::array<char, 512> buffer;
+    in.getline(buffer.data(), buffer.size());
+    // Delimiter is extracted and contributes to gcount() but is not stored
+    std::size_t lineLength;
+    if (in.good())
+        lineLength = static_cast<std::size_t>(in.gcount() - 1);
+    else if (in.eof())
+        lineLength = static_cast<std::size_t>(in.gcount());
+    else
+        return;
 
-                // Skip spaces after the Title: tag
-                if (titlePos != string::npos)
-                    titlePos = firstLine.find_first_not_of(" ", titlePos + (sizeof(TitleTag) - 1));
+    std::string_view line(buffer.data(), lineLength);
 
-                if (titlePos != string::npos)
-                {
-                    item.title = firstLine.substr(titlePos);
-                }
-                else
-                {
-                    // No title tag--just use the filename
-                    item.title = filename;
-                }
+    // Skip whitespace before 'Title:' tag
+    if (auto pos = line.find_first_not_of(" \t"sv); pos == std::string_view::npos)
+        return;
+    else
+        line = line.substr(pos);
 
-                menuItems->push_back(item);
-            }
-        }
+    // Check for 'Title:' tag
+    if (line.size() < TitleTag.size() || line.substr(0, TitleTag.size()) != TitleTag)
+        return;
+    else
+        line = line.substr(TitleTag.size());
 
-        return true;
+    // Skip whitespace after 'Title: tag
+    if (auto pos = line.find_first_not_of(" \t"sv); pos == std::string_view::npos)
+        return;
+    else
+        line = line.substr(pos);
+
+    // Trim trailing whitespace
+    if (auto pos = line.find_last_not_of(" \t"sv); pos == std::string_view::npos)
+        return;
+    else
+        item.title = line.substr(0, pos + 1);
+}
+
+} // end unnamed namespace
+
+std::vector<ScriptMenuItem>
+ScanScriptsDirectory(const fs::path& scriptsDir, bool deep)
+{
+    std::vector<ScriptMenuItem> scripts;
+
+    if (scriptsDir.empty())
+        return scripts;
+
+    std::error_code ec;
+    if (!fs::is_directory(scriptsDir, ec))
+    {
+        GetLogger()->warn(_("Path {} doesn't exist or isn't a directory\n"), scriptsDir);
+        return scripts;
     }
 
-    vector<ScriptMenuItem>* menuItems{ nullptr };
-};
-
-
-
-std::vector<ScriptMenuItem>*
-ScanScriptsDirectory(string scriptsDir, bool deep)
-{
-    vector<ScriptMenuItem>* scripts = new vector<ScriptMenuItem>;
-
-    Directory* dir = OpenDirectory(scriptsDir);
-
-    ScriptScanner scanner;
-    scanner.menuItems = scripts;
-    scanner.pushDir(scriptsDir);
-
-    dir->enumFiles(scanner, deep);
-    delete dir;
+    if (deep)
+    {
+        for (auto iter = fs::recursive_directory_iterator(scriptsDir, ec); iter != end(iter); iter.increment(ec))
+        {
+            if (ec)
+                continue;
+            process(*iter, scripts);
+        }
+    }
+    else
+    {
+        for (const auto& p : fs::directory_iterator(scriptsDir, ec))
+        {
+            if (ec)
+                continue;
+            process(p, scripts);
+        }
+    }
 
     return scripts;
 }
-

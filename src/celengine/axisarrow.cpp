@@ -9,121 +9,149 @@
 // of the License, or (at your option) any later version.
 
 #include <algorithm>
+#include <vector>
+#include <celcompat/numbers.h>
+#include <celmath/geomutil.h>
 #include <celmath/mathlib.h>
-#include <GL/glew.h>
-#include "vecgl.h"
+#include <celmath/vecgl.h>
+#include <celrender/linerenderer.h>
+#include <celrender/gl/buffer.h>
+#include <celrender/gl/vertexobject.h>
 #include "axisarrow.h"
-#include "selection.h"
-#include "frame.h"
 #include "body.h"
+#include "frame.h"
+#include "render.h"
+#include "selection.h"
+#include "shadermanager.h"
 #include "timelinephase.h"
 
-using namespace Eigen;
-using namespace std;
+using celestia::render::LineRenderer;
+namespace gl = celestia::gl;
+namespace math = celestia::math;
 
+// draw a simple circle or annulus
+#define DRAW_ANNULUS 0
 
-static const unsigned int MaxArrowSections = 100;
+constexpr float shaftLength  = 0.85f;
+constexpr float headLength   = 0.10f;
+constexpr float shaftRadius  = 0.010f;
+constexpr float headRadius   = 0.025f;
+constexpr unsigned nSections = 30;
 
-static void RenderArrow(float shaftLength,
-                        float headLength,
-                        float shaftRadius,
-                        float headRadius,
-                        unsigned int nSections)
+namespace
 {
-    float sintab[MaxArrowSections];
-    float costab[MaxArrowSections];
 
-    unsigned int i;
+gl::VertexObject&
+GetArrowVAO()
+{
+    static bool initialized = false;
 
-    nSections = min(MaxArrowSections, nSections);
+    static std::unique_ptr<gl::VertexObject> vo;
+    static std::unique_ptr<gl::Buffer> bo;
 
-    // Initialize the trig tables
-    for (i = 0; i < nSections; i++)
+    if (initialized)
+        return *vo;
+
+    initialized = true;
+
+    vo = std::make_unique<gl::VertexObject>();
+    bo = std::make_unique<gl::Buffer>();
+
+    // circle at bottom of a shaft
+    std::vector<Eigen::Vector3f> circle;
+    // arrow shaft
+    std::vector<Eigen::Vector3f> shaft;
+    // annulus
+    std::vector<Eigen::Vector3f> annulus;
+    // head of the arrow
+    std::vector<Eigen::Vector3f> head;
+
+    for (unsigned i = 0; i <= nSections; i++)
     {
-        double theta = (i * 2.0 * PI) / nSections;
-        sintab[i] = (float) sin(theta);
-        costab[i] = (float) cos(theta);
+        float c, s;
+        math::sincos((i * 2.0f * celestia::numbers::pi_v<float>) / nSections, c, s);
+
+        // circle at bottom
+        Eigen::Vector3f v0(shaftRadius * c, shaftRadius * s, 0.0f);
+        if (i > 0)
+            circle.push_back(v0);
+        circle.push_back(Eigen::Vector3f::Zero());
+        circle.push_back(v0);
+
+        // shaft
+        Eigen::Vector3f v1(shaftRadius * c, shaftRadius * s, shaftLength);
+        Eigen::Vector3f v1prev;
+        if (i > 0)
+        {
+            shaft.push_back(v0); // left triangle
+
+            shaft.push_back(v0); // right
+            shaft.push_back(v1prev);
+            shaft.push_back(v1);
+        }
+        shaft.push_back(v0); // left
+        shaft.push_back(v1);
+        v1prev = v1;
+
+        // annulus
+        Eigen::Vector3f v2(headRadius * c, headRadius * s, shaftLength);
+#if DRAW_ANNULUS
+        Eigen::Vector3f v2prev;
+        if (i > 0)
+        {
+            annulus.push_back(v2);
+
+            annulus.push_back(v2);
+            annulus.push_back(v2prev);
+            annulus.push_back(v1);
+        }
+        annulus.push_back(v2);
+        annulus.push_back(v1);
+        v2prev = v1;
+#else
+        Eigen::Vector3f v3(0.0f, 0.0f, shaftLength);
+        if (i > 0)
+            annulus.push_back(v2);
+        annulus.push_back(v2);
+        annulus.push_back(v3);
+#endif
+
+        // head
+        Eigen::Vector3f v4(0.0f, 0.0f, shaftLength + headLength);
+        if (i > 0)
+            head.push_back(v2);
+        head.push_back(v4);
+        head.push_back(v2);
     }
 
-    // Render the circle at the botton of the arrow shaft
-    glBegin(GL_TRIANGLE_FAN);
-    glVertex3f(0.0f, 0.0f, 0.0f);
-    for (i = 0; i <= nSections; i++)
-    {
-        unsigned int n = (nSections - i) % nSections;
-        glVertex3f(shaftRadius * costab[n], shaftRadius * sintab[n], 0.0f);
-    }
-    glEnd();
+    circle.push_back(circle[1]);
+    shaft.push_back(shaft[0]);
+#if DRAW_ANNULUS
+    annulus.push_back(annulus[0]);
+#else
+    annulus.push_back(annulus[1]);
+#endif
+    head.push_back(head[1]);
 
-    // Render the arrow shaft
-    glBegin(GL_QUAD_STRIP);
-    for (i = 0; i <= nSections; i++)
-    {
-        unsigned int n = i % nSections;
-        glVertex3f(shaftRadius * costab[n], shaftRadius * sintab[n], shaftLength);
-        glVertex3f(shaftRadius * costab[n], shaftRadius * sintab[n], 0.0f);
-    }
-    glEnd();
+    std::vector<Eigen::Vector3f> arrow;
+    arrow.reserve(circle.size() + shaft.size() + annulus.size() + head.size());
+    std::copy(circle.begin(), circle.end(), std::back_inserter(arrow));
+    std::copy(shaft.begin(), shaft.end(), std::back_inserter(arrow));
+    std::copy(annulus.begin(), annulus.end(), std::back_inserter(arrow));
+    std::copy(head.begin(), head.end(), std::back_inserter(arrow));
 
-    // Render the annulus
-    glBegin(GL_QUAD_STRIP);
-    for (i = 0; i <= nSections; i++)
-    {
-        unsigned int n = i % nSections;
-        glVertex3f(headRadius * costab[n],  headRadius * sintab[n], shaftLength);
-        glVertex3f(shaftRadius * costab[n], shaftRadius * sintab[n], shaftLength);
-    }
-    glEnd();
+    bo->setData(arrow, gl::Buffer::BufferUsage::StaticDraw);
 
-    // Render the head of the arrow
-    glBegin(GL_TRIANGLE_FAN);
-    glVertex3f(0.0f, 0.0f, shaftLength + headLength);
-    for (i = 0; i <= nSections; i++)
-    {
-        unsigned int n = i % nSections;
-        glVertex3f(headRadius * costab[n], headRadius * sintab[n], shaftLength);
-    }
-    glEnd();
+    vo->setCount(static_cast<int>(arrow.size())).addVertexBuffer(
+        *bo,
+        CelestiaGLProgram::VertexCoordAttributeIndex,
+        3,
+        gl::VertexObject::DataType::Float);
+
+    return *vo;
 }
 
-
-// Draw letter x in xz plane
-static void RenderX()
-{
-    glBegin(GL_LINES);
-    glVertex3f(0, 0, 0);
-    glVertex3f(1, 0, 1);
-    glVertex3f(1, 0, 0);
-    glVertex3f(0, 0, 1);
-    glEnd();
-}
-
-
-// Draw letter y in xz plane
-static void RenderY()
-{
-    glBegin(GL_LINES);
-    glVertex3f(0, 0, 1);
-    glVertex3f(0.5f, 0, 0.5f);
-    glVertex3f(1, 0, 1);
-    glVertex3f(0.5f, 0, 0.5f);
-    glVertex3f(0.5f, 0, 0);
-    glVertex3f(0.5f, 0, 0.5f);
-    glEnd();
-}
-
-
-// Draw letter z in xz plane
-static void RenderZ()
-{
-    glBegin(GL_LINE_STRIP);
-    glVertex3f(0, 0, 1);
-    glVertex3f(1, 0, 1);
-    glVertex3f(0, 0, 0);
-    glVertex3f(1, 0, 0);
-    glEnd();
-}
-
+} // anonymous namespace
 
 /****** ArrowReferenceMark base class ******/
 
@@ -131,12 +159,10 @@ ArrowReferenceMark::ArrowReferenceMark(const Body& _body) :
     body(_body),
     size(1.0),
     color(1.0f, 1.0f, 1.0f),
-#ifdef USE_HDR
-    opacity(0.0f)
-#else
     opacity(1.0f)
-#endif
 {
+    shadprop.texUsage = TexUsage::VertexColors;
+    shadprop.lightModel = LightingModel::UnlitModel;
 }
 
 
@@ -148,19 +174,20 @@ ArrowReferenceMark::setSize(float _size)
 
 
 void
-ArrowReferenceMark::setColor(Color _color)
+ArrowReferenceMark::setColor(const Color &_color)
 {
     color = _color;
 }
 
 
 void
-ArrowReferenceMark::render(Renderer* /* renderer */,
-                           const Vector3f& /* position */,
+ArrowReferenceMark::render(Renderer* renderer,
+                           const Eigen::Vector3f& position,
                            float /* discSize */,
-                           double tdb) const
+                           double tdb,
+                           const Matrices& m) const
 {
-    Vector3d v = getDirection(tdb);
+    Eigen::Vector3d v = getDirection(tdb);
     if (v.norm() < 1.0e-12)
     {
         // Skip rendering of zero-length vectors
@@ -168,50 +195,35 @@ ArrowReferenceMark::render(Renderer* /* renderer */,
     }
 
     v.normalize();
-    Quaterniond q;
-    q.setFromTwoVectors(Vector3d::UnitZ(), v);
+    Eigen::Quaterniond q;
+    q.setFromTwoVectors(Eigen::Vector3d::UnitZ(), v);
 
+    Renderer::PipelineState ps;
+    ps.depthTest = true;
     if (opacity == 1.0f)
     {
-        // Enable depth buffering
-        glEnable(GL_DEPTH_TEST);
-        glDepthMask(GL_TRUE);
-        glDisable(GL_BLEND);
+        ps.depthMask = true;
     }
     else
     {
-        glEnable(GL_DEPTH_TEST);
-        glDepthMask(GL_FALSE);
-        glEnable(GL_BLEND);
-#ifdef USE_HDR
-        glBlendFunc(GL_ONE_MINUS_SRC_ALPHA, GL_SRC_ALPHA);
-#else
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-#endif
+        ps.blending = true;
+        ps.blendFunc = {GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA};
     }
+    renderer->setPipelineState(ps);
 
-    glPushMatrix();
-    glRotate(q.cast<float>());
-    glScalef(size, size, size);
-    glDisable(GL_LIGHTING);
-    glDisable(GL_TEXTURE_2D);
+    Eigen::Affine3f transform = Eigen::Translation3f(position) * q.cast<float>() * Eigen::Scaling(size);
+    Eigen::Matrix4f mv = (*m.modelview) * transform.matrix();
 
-    float shaftLength = 0.85f;
-    float headLength = 0.10f;
-    float shaftRadius = 0.010f;
-    float headRadius = 0.025f;
-    unsigned int nSections = 30;
+    CelestiaGLProgram* prog = renderer->getShaderManager().getShader(shadprop);
+    if (prog == nullptr)
+        return;
+    prog->use();
+    prog->setMVPMatrices(*m.projection, mv);
 
-    glColor4f(color.red(), color.green(), color.blue(), opacity);
-    RenderArrow(shaftLength, headLength, shaftRadius, headRadius, nSections);
+    glVertexAttrib4f(CelestiaGLProgram::ColorAttributeIndex,
+		     color.red(), color.green(), color.blue(), opacity);
 
-    glPopMatrix();
-
-    glDisable(GL_DEPTH_TEST);
-    glDepthMask(GL_FALSE);
-    glEnable(GL_TEXTURE_2D);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+    GetArrowVAO().draw();
 }
 
 
@@ -220,12 +232,10 @@ ArrowReferenceMark::render(Renderer* /* renderer */,
 AxesReferenceMark::AxesReferenceMark(const Body& _body) :
     body(_body),
     size(),
-#ifdef USE_HDR
-    opacity(0.0f)
-#else
     opacity(1.0f)
-#endif
 {
+    shadprop.texUsage = TexUsage::VertexColors;
+    shadprop.lightModel = LightingModel::UnlitModel;
 }
 
 
@@ -240,46 +250,34 @@ void
 AxesReferenceMark::setOpacity(float _opacity)
 {
     opacity = _opacity;
-#ifdef USE_HDR
-    opacity = 1.0f - opacity;
-#endif
 }
 
 
 void
-AxesReferenceMark::render(Renderer* /* renderer */,
-                          const Vector3f& /* position */,
+AxesReferenceMark::render(Renderer* renderer,
+                          const Eigen::Vector3f& position,
                           float /* discSize */,
-                          double tdb) const
+                          double tdb,
+                          const Matrices& m) const
 {
-    Quaterniond q = getOrientation(tdb);
+    Eigen::Quaterniond q = getOrientation(tdb);
 
+    Renderer::PipelineState ps;
+    ps.depthTest = true;
     if (opacity == 1.0f)
     {
-        // Enable depth buffering
-        glEnable(GL_DEPTH_TEST);
-        glDepthMask(GL_TRUE);
-        glDisable(GL_BLEND);
+        ps.depthMask = true;
     }
     else
     {
-        glEnable(GL_DEPTH_TEST);
-        glDepthMask(GL_FALSE);
-        glEnable(GL_BLEND);
-#ifdef USE_HDR
-        glBlendFunc(GL_ONE_MINUS_SRC_ALPHA, GL_SRC_ALPHA);
-#else
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-#endif
+        ps.blending = true;
+        ps.blendFunc = {GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA};
     }
+    renderer->setPipelineState(ps);
 
-    glDisable(GL_TEXTURE_2D);
-
-    glPushMatrix();
-    glRotate(q.cast<float>());
-    glScalef(size, size, size);
-
-    glDisable(GL_LIGHTING);
+    Eigen::Affine3f transform = Eigen::Translation3f(position) * q.cast<float>() * Eigen::Scaling(size);
+    Eigen::Matrix4f projection = *m.projection;
+    Eigen::Matrix4f modelView = (*m.modelview) * transform.matrix();
 
 #if 0
     // Simple line axes
@@ -300,50 +298,60 @@ AxesReferenceMark::render(Renderer* /* renderer */,
     glEnd();
 #endif
 
-    float shaftLength = 0.85f;
-    float headLength = 0.10f;
-    float shaftRadius = 0.010f;
-    float headRadius = 0.025f;
-    unsigned int nSections = 30;
     float labelScale = 0.1f;
 
+    CelestiaGLProgram* prog = renderer->getShaderManager().getShader(shadprop);
+    if (prog == nullptr)
+        return;
+    prog->use();
+
+    Eigen::Affine3f labelTransform = Eigen::Translation3f(Eigen::Vector3f(0.1f, 0.0f, 0.75f)) * Eigen::Scaling(labelScale);
+    Eigen::Matrix4f labelTransformMatrix = labelTransform.matrix();
+
     // x-axis
-    glPushMatrix();
-    glRotatef(90.0f, 0.0f, 1.0f, 0.0f);
-    glColor4f(1.0f, 0.0f, 0.0f, opacity);
-    RenderArrow(shaftLength, headLength, shaftRadius, headRadius, nSections);
-    glTranslatef(0.1f, 0.0f, 0.75f);
-    glScalef(labelScale, labelScale, labelScale);
-    RenderX();
-    glPopMatrix();
+    Eigen::Matrix4f xModelView = modelView * math::YRot90Matrix<float>;
+    glVertexAttrib4f(CelestiaGLProgram::ColorAttributeIndex, 1.0f, 0.0f, 0.0f, opacity);
+    prog->setMVPMatrices(projection, xModelView);
+    GetArrowVAO().draw();
 
     // y-axis
-    glPushMatrix();
-    glRotatef(180.0f, 0.0f, 1.0f, 0.0f);
-    glColor4f(0.0f, 1.0f, 0.0f, opacity);
-    RenderArrow(shaftLength, headLength, shaftRadius, headRadius, nSections);
-    glTranslatef(0.1f, 0.0f, 0.75f);
-    glScalef(labelScale, labelScale, labelScale);
-    RenderY();
-    glPopMatrix();
+    Eigen::Matrix4f yModelView = modelView * math::YRot180Matrix<float>;
+    glVertexAttrib4f(CelestiaGLProgram::ColorAttributeIndex, 0.0f, 1.0f, 0.0f, opacity);
+    prog->setMVPMatrices(projection, yModelView);
+    GetArrowVAO().draw();
 
     // z-axis
-    glPushMatrix();
-    glRotatef(-90.0f, 1.0f, 0.0f, 0.0f);
-    glColor4f(0.0f, 0.0f, 1.0f, opacity);
-    RenderArrow(shaftLength, headLength, shaftRadius, headRadius, nSections);
-    glTranslatef(0.1f, 0.0f, 0.75f);
-    glScalef(labelScale, labelScale, labelScale);
-    RenderZ();
-    glPopMatrix();
+    Eigen::Matrix4f zModelView = modelView * math::XRot270Matrix<float>;
+    glVertexAttrib4f(CelestiaGLProgram::ColorAttributeIndex, 0.0f, 0.0f, 1.0f, opacity);
+    prog->setMVPMatrices(projection, zModelView);
+    GetArrowVAO().draw();
 
-    glPopMatrix();
+    LineRenderer lr(*renderer);
+    lr.startUpdate();
+    // X
+    lr.addSegment({0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 1.0f});
+    lr.addSegment({1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f});
+    // Y
+    lr.addSegment({0.0f, 0.0f, 1.0f}, {0.5f, 0.0f, 0.5f});
+    lr.addSegment({1.0f, 0.0f, 1.0f}, {0.5f, 0.0f, 0.5f});
+    lr.addSegment({0.5f, 0.0f, 0.0f}, {0.5f, 0.0f, 0.5f});
+    // Z
+    lr.addSegment({0.0f, 0.0f, 1.0f}, {1.0f, 0.0f, 1.0f});
+    lr.addSegment({1.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f});
+    lr.addSegment({0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f});
 
-    glDisable(GL_DEPTH_TEST);
-    glDepthMask(GL_FALSE);
-    glEnable(GL_TEXTURE_2D);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+    Eigen::Matrix4f mv;
+    // X
+    mv = xModelView * labelTransformMatrix;
+    lr.render({&projection, &mv}, {1.0f, 0.0f, 0.0f, opacity}, 4, 0);
+    // Y
+    mv = yModelView * labelTransformMatrix;
+    lr.render({&projection, &mv}, {0.0f, 1.0f, 0.0f, opacity}, 6, 4);
+    // Z
+    mv = zModelView * labelTransformMatrix;
+    lr.render({&projection, &mv}, {0.0f, 0.0f, 1.0f, opacity}, 6, 10);
+
+    lr.finish();
 }
 
 
@@ -357,10 +365,10 @@ VelocityVectorArrow::VelocityVectorArrow(const Body& _body) :
     setSize(body.getRadius() * 2.0f);
 }
 
-Vector3d
+Eigen::Vector3d
 VelocityVectorArrow::getDirection(double tdb) const
 {
-    const TimelinePhase* phase = body.getTimeline()->findPhase(tdb);
+    const TimelinePhase* phase = body.getTimeline()->findPhase(tdb).get();
     return phase->orbitFrame()->getOrientation(tdb).conjugate() * phase->orbit()->velocityAtTime(tdb);
 }
 
@@ -375,11 +383,11 @@ SunDirectionArrow::SunDirectionArrow(const Body& _body) :
     setSize(body.getRadius() * 2.0f);
 }
 
-Vector3d
+Eigen::Vector3d
 SunDirectionArrow::getDirection(double tdb) const
 {
     const Body* b = &body;
-    Star* sun = nullptr;
+    const Star* sun = nullptr;
     while (b != nullptr)
     {
         Selection center = b->getOrbitFrame(tdb)->getCenter();
@@ -389,9 +397,9 @@ SunDirectionArrow::getDirection(double tdb) const
     }
 
     if (sun != nullptr)
-        return Selection(sun).getPosition(tdb).offsetFromKm(body.getPosition(tdb));
+        return sun->getPosition(tdb).offsetFromKm(body.getPosition(tdb));
 
-    return Vector3d::Zero();
+    return Eigen::Vector3d::Zero();
 }
 
 
@@ -405,10 +413,10 @@ SpinVectorArrow::SpinVectorArrow(const Body& _body) :
     setSize(body.getRadius() * 2.0f);
 }
 
-Vector3d
+Eigen::Vector3d
 SpinVectorArrow::getDirection(double tdb) const
 {
-    const TimelinePhase* phase = body.getTimeline()->findPhase(tdb);
+    const TimelinePhase* phase = body.getTimeline()->findPhase(tdb).get();
     return phase->bodyFrame()->getOrientation(tdb).conjugate() * phase->rotationModel()->angularVelocityAtTime(tdb);
 }
 
@@ -428,7 +436,7 @@ BodyToBodyDirectionArrow::BodyToBodyDirectionArrow(const Body& _body, const Sele
 }
 
 
-Vector3d
+Eigen::Vector3d
 BodyToBodyDirectionArrow::getDirection(double tdb) const
 {
     return target.getPosition(tdb).offsetFromKm(body.getPosition(tdb));
@@ -445,10 +453,10 @@ BodyAxisArrows::BodyAxisArrows(const Body& _body) :
     setSize(body.getRadius() * 2.0f);
 }
 
-Quaterniond
+Eigen::Quaterniond
 BodyAxisArrows::getOrientation(double tdb) const
 {
-    return (Quaterniond(AngleAxis<double>(PI, Vector3d::UnitY())) * body.getEclipticToBodyFixed(tdb)).conjugate();
+    return (math::YRot180<double> * body.getEclipticToBodyFixed(tdb)).conjugate();
 }
 
 
@@ -462,7 +470,7 @@ FrameAxisArrows::FrameAxisArrows(const Body& _body) :
     setSize(body.getRadius() * 2.0f);
 }
 
-Quaterniond
+Eigen::Quaterniond
 FrameAxisArrows::getOrientation(double tdb) const
 {
     return body.getEclipticToFrame(tdb).conjugate();

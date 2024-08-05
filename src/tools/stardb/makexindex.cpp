@@ -9,22 +9,22 @@
 //
 // Convert an ASCII cross index to binary
 
-#include <iostream>
+#include <cstdint>
 #include <fstream>
 #include <iomanip>
+#include <iostream>
 #include <string>
+
 #include <celutil/bytes.h>
 
-using namespace std;
 
-
-static string inputFilename;
-static string outputFilename;
+static std::string inputFilename;
+static std::string outputFilename;
 
 
 void Usage()
 {
-    cerr << "Usage: makexindex [input file] [output file]\n";
+    std::cerr << "Usage: makexindex [input file] [output file]\n";
 }
 
 
@@ -37,7 +37,7 @@ bool parseCommandLine(int argc, char* argv[])
     {
         if (argv[i][0] == '-')
         {
-            cerr << "Unknown command line switch: " << argv[i] << '\n';
+            std::cerr << "Unknown command line switch: " << argv[i] << '\n';
             return false;
         }
         else
@@ -45,13 +45,13 @@ bool parseCommandLine(int argc, char* argv[])
             if (fileCount == 0)
             {
                 // input filename first
-                inputFilename = string(argv[i]);
+                inputFilename = std::string(argv[i]);
                 fileCount++;
             }
             else if (fileCount == 1)
             {
                 // output filename second
-                outputFilename = string(argv[i]);
+                outputFilename = std::string(argv[i]);
                 fileCount++;
             }
             else
@@ -67,21 +67,21 @@ bool parseCommandLine(int argc, char* argv[])
 }
 
 
-static void writeUint(ostream& out, uint32_t n)
+static void writeUint(std::ostream& out, std::uint32_t n)
 {
     LE_TO_CPU_INT32(n, n);
-    out.write(reinterpret_cast<char*>(&n), sizeof n);
+    out.write(reinterpret_cast<const char*>(&n), sizeof n);
 }
 
 
-static void writeShort(ostream& out, int16_t n)
+static void writeShort(std::ostream& out, std::int16_t n)
 {
     LE_TO_CPU_INT16(n, n);
-    out.write(reinterpret_cast<char*>(&n), sizeof n);
+    out.write(reinterpret_cast<const char*>(&n), sizeof n);
 }
 
 
-bool WriteCrossIndex(istream& in, ostream& out)
+bool WriteCrossIndex(std::istream& in, std::ostream& out)
 {
     // Write the header
     out.write("CELINDEX", 8);
@@ -92,8 +92,8 @@ bool WriteCrossIndex(istream& in, ostream& out)
     unsigned int record = 0;
     while (!in.eof())
     {
-        unsigned int catalogNumber;
-        unsigned int celCatalogNumber;
+        std::uint32_t catalogNumber;
+        std::uint32_t celCatalogNumber;
 
         in >> catalogNumber;
         if (in.eof())
@@ -102,12 +102,12 @@ bool WriteCrossIndex(istream& in, ostream& out)
         in >> celCatalogNumber;
         if (!in.good())
         {
-            cerr << "Error parsing record #" << record << '\n';
+            std::cerr << "Error parsing record #" << record << '\n';
             return false;
         }
 
-        writeUint(out, (uint32_t) catalogNumber);
-        writeUint(out, (uint32_t) celCatalogNumber);
+        writeUint(out, catalogNumber);
+        writeUint(out, celCatalogNumber);
 
         record++;
     }
@@ -118,32 +118,36 @@ bool WriteCrossIndex(istream& in, ostream& out)
 
 int main(int argc, char* argv[])
 {
-    if (!parseCommandLine(argc, argv) || inputFilename.empty())
+    if (!parseCommandLine(argc, argv)/* || inputFilename.empty()*/)
     {
         Usage();
         return 1;
     }
 
-    istream* inputFile = &cin;
+    std::istream* inputFile = &std::cin;
+    std::ifstream fin;
     if (!inputFilename.empty())
     {
-        inputFile = new ifstream(inputFilename, ios::in);
-        if (!inputFile->good())
+        fin.open(inputFilename, std::ios::in);
+        if (!fin.good())
         {
-            cerr << "Error opening input file " << inputFilename << '\n';
+            std::cerr << "Error opening input file " << inputFilename << '\n';
             return 1;
         }
+        inputFile = &fin;
     }
 
-    ostream* outputFile = &cout;
+    std::ostream* outputFile = &std::cout;
+    std::ofstream fout;
     if (!outputFilename.empty())
     {
-        outputFile = new ofstream(outputFilename, ios::out | ios::binary);
-        if (!outputFile->good())
+        fout.open(outputFilename, std::ios::out | std::ios::binary);
+        if (!fout.good())
         {
-            cerr << "Error opening output file " << outputFilename << '\n';
+            std::cerr << "Error opening output file " << outputFilename << '\n';
             return 1;
         }
+        outputFile = &fout;
     }
 
     bool success = WriteCrossIndex(*inputFile, *outputFile);

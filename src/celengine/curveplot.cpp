@@ -27,58 +27,37 @@
 // License and a copy of the GNU General Public License along with
 // CurvePlot. If not, see <http://www.gnu.org/licenses/>.
 
-#define DEBUG_ADAPTIVE_SPLINE 0
-#if DEBUG_ADAPTIVE_SPLINE
-#define USE_VERTEX_BUFFER 0
-#else
-#define USE_VERTEX_BUFFER 0
-#endif
+#include <algorithm>
+#include <cmath>
+#include <memory>
+#include <vector>
+#include <celrender/linerenderer.h>
 
 #include "curveplot.h"
-#include "GL/glew.h"
-#include <vector>
-#include <iostream>
+#include "render.h"
+#include "shadermanager.h"
 
-using namespace std;
-using namespace Eigen;
+using celestia::render::LineRenderer;
 
-static const unsigned int SubdivisionFactor = 8;
-static const double InvSubdivisionFactor = 1.0 / (double) SubdivisionFactor;
-
-
-
-#if DEBUG_ADAPTIVE_SPLINE
-static float SplineColors[10][3] = {
-    { 0, 0, 1 },
-    { 0, 1, 1 },
-    { 0, 1, 0 },
-    { 1, 1, 0 },
-    { 1, 0, 0 },
-    { 1, 0, 1 },
-    { 0.5f, 0.5f, 1.0f },
-    { 0.5f, 1.0f, 1.0f },
-    { 0.5f, 1.0f, 0.5f },
-    { 1.0f, 1.0f, 0.5f },
-};
-
-static unsigned int SegmentCounts[32];
-#endif
-
-#ifndef EIGEN_VECTORIZE
-// Vectorization should be enabled for improved performance.
-#endif
+namespace
+{
+constexpr unsigned int VertexBufferCapacity = 4096;
+constexpr unsigned int SubdivisionFactor = 8;
+constexpr double InvSubdivisionFactor = 1.0 / static_cast<double>(SubdivisionFactor);
+constexpr float OrbitThickness = 1.0f;
 
 // Convert a 3-vector to a 4-vector by adding a zero
-static inline Vector4d zeroExtend(const Vector3d& v)
+inline Eigen::Vector4d
+zeroExtend(const Eigen::Vector3d& v)
 {
-    return Vector4d(v.x(), v.y(), v.z(), 0.0);
+    return Eigen::Vector4d(v.x(), v.y(), v.z(), 0.0);
 }
 
 
 class HighPrec_Frustum
 {
 public:
-    HighPrec_Frustum(double nearZ, double farZ, const Vector3d planeNormals[]) :
+    HighPrec_Frustum(double nearZ, double farZ, const Eigen::Vector3d planeNormals[]) :
         m_nearZ(nearZ),
         m_farZ(farZ)
     {
@@ -86,9 +65,9 @@ public:
         {
             m_planeNormals[i] = zeroExtend(planeNormals[i]);
         }
-    }      
+    }
 
-    inline bool cullSphere(const Vector3d& center,
+    inline bool cullSphere(const Eigen::Vector3d& center,
                            double radius) const
     {
         return (center.z() - radius > m_nearZ ||
@@ -99,7 +78,7 @@ public:
                 center.dot(m_planeNormals[3].head(3)) < -radius);
     }
 
-    inline bool cullSphere(const Vector4d& center,
+    inline bool cullSphere(const Eigen::Vector4d& center,
                            double radius) const
     {
         return (center.z() - radius > m_nearZ ||
@@ -116,16 +95,17 @@ public:
 private:
     double m_nearZ;
     double m_farZ;
-    Vector4d m_planeNormals[4];
+    Eigen::Vector4d m_planeNormals[4];
 };
 
 
-static inline Matrix4d cubicHermiteCoefficients(const Vector4d& p0,
-                                                const Vector4d& p1,
-                                                const Vector4d& v0,
-                                                const Vector4d& v1)
+inline Eigen::Matrix4d
+cubicHermiteCoefficients(const Eigen::Vector4d& p0,
+                         const Eigen::Vector4d& p1,
+                         const Eigen::Vector4d& v0,
+                         const Eigen::Vector4d& v1)
 {
-    Matrix4d coeff;
+    Eigen::Matrix4d coeff;
     coeff.col(0) = p0;
     coeff.col(1) = v0;
     coeff.col(2) = 3.0 * (p1 - p0) - (2.0 * v0 + v1);
@@ -134,223 +114,77 @@ static inline Matrix4d cubicHermiteCoefficients(const Vector4d& p0,
     return coeff;
 }
 
-
-// Test a point to see if it lies within the frustum defined by
-// planes z=nearZ, z=farZ, and the four side planes with specified
-// normals.
-#if 0
-static inline bool frustumCull(const Vector4d& curvePoint,
-                               double curveBoundingRadius,
-                               double nearZ, double farZ,
-                               const Vector4d viewFrustumPlaneNormals[])
-{
-    return (curvePoint.z() - curveBoundingRadius > nearZ ||
-            curvePoint.z() + curveBoundingRadius < farZ  ||
-            curvePoint.dot(viewFrustumPlaneNormals[0]) < -curveBoundingRadius ||
-            curvePoint.dot(viewFrustumPlaneNormals[1]) < -curveBoundingRadius ||
-            curvePoint.dot(viewFrustumPlaneNormals[2]) < -curveBoundingRadius ||
-            curvePoint.dot(viewFrustumPlaneNormals[3]) < -curveBoundingRadius);
-}
-#endif
-
+const Eigen::Matrix4f ModelViewMatrix(Eigen::Matrix4f::Identity());
 
 class HighPrec_VertexBuffer
 {
 public:
-    HighPrec_VertexBuffer() :
-        currentPosition(0),
-        capacity(4096),
-        data(nullptr),
-        vbobj(0),
-        currentStripLength(0)
+    void setup(const Renderer& _renderer, const Color& _color)
     {
-        data = new Vector4f[capacity];
-    }
-
-    void setup()
-    {
-#if USE_VERTEX_BUFFER
-        if (vbobj)
-        {
-            glBindBuffer(GL_ARRAY_BUFFER, vbobj);
-        }
-
-        glEnableClientState(GL_VERTEX_ARRAY);
-
-        mapBuffer();
-
-        Vector4f* vertexBase = vbobj ? (Vector4f*) nullptr : data;
-        glVertexPointer(3, GL_FLOAT, sizeof(Vector4f), vertexBase);
-
         stripLengths.clear();
         currentStripLength = 0;
-        currentPosition = 0;
-#endif
+        color = _color;
+        renderer = &_renderer;
+
+        if (lr == nullptr)
+        {
+            lr = new LineRenderer(*renderer, OrbitThickness, LineRenderer::PrimType::LineStrip, LineRenderer::StorageType::Stream, LineRenderer::VertexFormat::P3F_C4UB);
+            lr->setVertexCount(VertexBufferCapacity);
+        }
+        lr->startUpdate();
     }
 
     void finish()
     {
-        unmapBuffer();
-
-#if USE_VERTEX_BUFFER
-        if (vbobj)
-        {
-            glDisableClientState(GL_VERTEX_ARRAY);
-            glBindBuffer(GL_ARRAY_BUFFER, 0);
-        }
-#endif
+        lr->finish();
     }
 
-    inline void vertex(const Vector3d& v)
+    inline void vertex(const Eigen::Vector4d& v, float opacity = 1.0f)
     {
-#if USE_VERTEX_BUFFER
-        data[currentPosition++].segment<3>(0) = v.cast<float>();
+        Eigen::Vector3f pos = v.head(3).cast<float>();
+        lr->addVertex(pos, {color, color.alpha() * opacity});
         ++currentStripLength;
-        if (currentPosition == capacity)
-        {
-            flush();
-
-            data[0].segment<3>(0) = v.cast<float>();
-            currentPosition = 1;
-            currentStripLength = 1;
-        }
-#else
-        glVertex3dv(v.data());
-#endif
-    }
-
-    inline void vertex(const Vector4d& v)
-    {
-#if USE_VERTEX_BUFFER
-        data[currentPosition++] = v.cast<float>();
-        ++currentStripLength;
-        if (currentPosition == capacity)
-        {
-            flush();
-
-            data[0] = v.cast<float>();
-            currentPosition = 1;
-            currentStripLength = 1;
-        }
-#else
-        glVertex3dv(v.data());
-#endif
-    }
-
-    inline void vertex(const Vector4d& v, const Vector4f& color)
-    {
-#if USE_VERTEX_BUFFER
-        data[currentPosition++] = v.cast<float>();
-        ++currentStripLength;
-        if (currentPosition == capacity)
-        {
-            flush();
-
-            data[0] = v.cast<float>();
-            currentPosition = 1;
-            currentStripLength = 1;
-        }
-#else
-        glColor4fv(color.data());
-        glVertex3dv(v.data());
-#endif
-    }
-
-    inline void begin()
-    {
-#if !USE_VERTEX_BUFFER
-        glBegin(GL_LINE_STRIP);
-#endif
     }
 
     inline void end()
     {
-#if USE_VERTEX_BUFFER
-        stripLengths.push_back(currentStripLength);
+        if (currentStripLength > 1)
+            stripLengths.push_back(currentStripLength);
+        else if (currentStripLength == 1)
+            lr->dropLast(); // Abandon line strips that contains only one point
         currentStripLength = 0;
-#else
-        glEnd();
-#endif
     }
 
     inline void flush()
     {
-#if USE_VERTEX_BUFFER
-        if (currentPosition > 0)
+        if (currentStripLength > 1)
+            end();
+
+        Matrices m = { &renderer->getCurrentProjectionMatrix(), &ModelViewMatrix };
+        unsigned int startIndex = 0;
+        lr->prerender(); // this will allocate a new GPU buffer if required
+        for (unsigned int lineCount : stripLengths)
         {
-            unmapBuffer();
-
-            // Finish the current line strip
-            if (currentStripLength > 1)
-                end();
-
-            unsigned int startIndex = 0;
-            for (vector<unsigned int>::const_iterator iter = stripLengths.begin(); iter != stripLengths.end(); ++iter)
-            {
-                glDrawArrays(GL_LINE_STRIP, startIndex, *iter);
-                startIndex += *iter;
-            }
-
-            mapBuffer();
-
-            currentPosition = 0;
-            stripLengths.clear();
+            lr->render(m, lineCount, startIndex);
+            startIndex += lineCount;
         }
-
+        stripLengths.clear();
+        lr->clear();
         currentStripLength = 0;
-#endif
     }
 
-    void createVertexBuffer()
+    void deinit()
     {
-#if USE_VERTEX_BUFFER
-        if (!vbobj)
-        {
-            glGenBuffers(1, &vbobj);
-            glBindBuffer(GL_ARRAY_BUFFER, vbobj);
-            glBufferData(GL_ARRAY_BUFFER,
-                         capacity * sizeof(Vector4f),
-                         nullptr,
-                         GL_STREAM_DRAW);
-        }
-#endif
+        delete lr;
+        lr = nullptr;
     }
 
-    void mapBuffer()
-    {
-        if (vbobj)
-        {
-            // Calling glBufferData() with nullptr before mapping the buffer
-            // is a hint to OpenGL that previous contents of vertex buffer will
-            // be discarded and overwritten. It enables renaming in the driver,
-            // hopefully resulting in performance gains.
-            glBufferData(GL_ARRAY_BUFFER,
-                         capacity * sizeof(Vector4f),
-                         nullptr,
-                         GL_STREAM_DRAW);
-
-            data = reinterpret_cast<Vector4f*>(glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY));
-        }
-    }
-
-    void unmapBuffer()
-    {
-#if USE_VERTEX_BUFFER
-        if (vbobj)
-        {
-            glUnmapBuffer(GL_ARRAY_BUFFER);
-            data = nullptr;
-        }
-#endif
-    }
-        
 private:
-    unsigned int currentPosition;
-    unsigned int capacity;
-    Vector4f* data;
-    GLuint vbobj;
-    unsigned int currentStripLength;
-    vector<unsigned int> stripLengths;
+    unsigned int currentStripLength { 0 };
+    std::vector<unsigned int> stripLengths;
+    LineRenderer *lr { nullptr };
+    const Renderer *renderer { nullptr };
+    Color color;
 };
 
 
@@ -378,7 +212,7 @@ public:
     // curve was culled and we need to start a new primitive sequence
     // with glBegin().
     bool renderCubic(bool restartCurve,
-                     const Matrix4d& coeff,
+                     const Eigen::Matrix4d& coeff,
                      double t0, double t1,
                      double curveBoundingRadius,
                      int depth) const
@@ -386,22 +220,14 @@ public:
         const double dt = (t1 - t0) * InvSubdivisionFactor;
         double segmentBoundingRadius = curveBoundingRadius * InvSubdivisionFactor;
 
-#if DEBUG_ADAPTIVE_SPLINE
-        {
-            int c = depth % 10;
-            glColor4f(SplineColors[c][0], SplineColors[c][1], SplineColors[c][2], 1.0f);
-            ++SegmentCounts[depth];
-        }
-#endif
-
-        Vector4d lastP = coeff * Vector4d(1.0, t0, t0 * t0, t0 * t0 * t0);
+        Eigen::Vector4d lastP = coeff * Eigen::Vector4d(1.0, t0, t0 * t0, t0 * t0 * t0);
 
         for (unsigned int i = 1; i <= SubdivisionFactor; i++)
         {
             double t = t0 + dt * i;
-            Vector4d p = coeff * Vector4d(1.0, t, t * t, t * t * t);
+            Eigen::Vector4d p = coeff * Eigen::Vector4d(1.0, t, t * t, t * t * t);
 
-            double minDistance = max(-m_viewFrustum.nearZ(), abs(p.z()) - segmentBoundingRadius);
+            double minDistance = std::max(-m_viewFrustum.nearZ(), std::abs(p.z()) - segmentBoundingRadius);
 
             if (segmentBoundingRadius >= m_subdivisionThreshold * minDistance)
             {
@@ -423,16 +249,8 @@ public:
             }
             else
             {
-#if DEBUG_ADAPTIVE_SPLINE
-                {
-                    int c = depth % 10;
-                    glColor4f(SplineColors[c][0], SplineColors[c][1], SplineColors[c][2], i % 2 ? 0.25f : 1.0f);
-                }
-#endif
-
                 if (restartCurve)
                 {
-                    m_vbuf.begin();
                     m_vbuf.vertex(lastP);
                     restartCurve = false;
                 }
@@ -448,9 +266,9 @@ public:
     // curve was culled and we need to start a new primitive sequence
     // with glBegin().
     bool renderCubicFaded(bool restartCurve,
-                          const Matrix4d& coeff,
+                          const Eigen::Matrix4d& coeff,
                           double t0, double t1,
-                          const Vector4f& color,
+                          const Eigen::Vector4f& color,
                           double fadeStart, double fadeRate,
                           double curveBoundingRadius,
                           int depth) const
@@ -458,26 +276,18 @@ public:
         const double dt = (t1 - t0) * InvSubdivisionFactor;
         double segmentBoundingRadius = curveBoundingRadius * InvSubdivisionFactor;
 
-#if DEBUG_ADAPTIVE_SPLINE
-        {
-            int c = depth % 10;
-            glColor4f(SplineColors[c][0], SplineColors[c][1], SplineColors[c][2], 1.0f);
-            ++SegmentCounts[depth];
-        }
-#endif
-
-        Vector4d lastP = coeff * Vector4d(1.0, t0, t0 * t0, t0 * t0 * t0);
+        Eigen::Vector4d lastP = coeff * Eigen::Vector4d(1.0, t0, t0 * t0, t0 * t0 * t0);
         double lastOpacity = (t0 - fadeStart) * fadeRate;
-        lastOpacity = max(0.0, min(1.0, lastOpacity)); // clamp
+        lastOpacity = std::clamp(lastOpacity, 0.0, 1.0);
 
         for (unsigned int i = 1; i <= SubdivisionFactor; i++)
         {
             double t = t0 + dt * i;
-            Vector4d p = coeff * Vector4d(1.0, t, t * t, t * t * t);
+            Eigen::Vector4d p = coeff * Eigen::Vector4d(1.0, t, t * t, t * t * t);
             double opacity = (t - fadeStart) * fadeRate;
-            opacity = max(0.0, min(1.0, opacity)); // clamp
+            opacity = std::clamp(opacity, 0.0, 1.0);
 
-            double minDistance = max(-m_viewFrustum.nearZ(), abs(p.z()) - segmentBoundingRadius);
+            double minDistance = std::max(-m_viewFrustum.nearZ(), std::abs(p.z()) - segmentBoundingRadius);
 
             if (segmentBoundingRadius >= m_subdivisionThreshold * minDistance)
             {
@@ -501,21 +311,13 @@ public:
             }
             else
             {
-#if DEBUG_ADAPTIVE_SPLINE
-                {
-                    int c = depth % 10;
-                    glColor4f(SplineColors[c][0], SplineColors[c][1], SplineColors[c][2], i % 2 ? 0.25f : 1.0f);
-                }
-#endif
-
                 if (restartCurve)
                 {
-                    m_vbuf.begin();
-                    m_vbuf.vertex(lastP, Vector4f(color.x(), color.y(), color.z(), color.w() * float(lastOpacity)));
+                    m_vbuf.vertex(lastP, static_cast<float>(lastOpacity));
                     restartCurve = false;
                 }
 
-                m_vbuf.vertex(p, Vector4f(color.x(), color.y(), color.z(), color.w() * float(opacity)));
+                m_vbuf.vertex(p, static_cast<float>(opacity));
             }
             lastP = p;
             lastOpacity = opacity;
@@ -531,14 +333,21 @@ private:
 };
 
 
+HighPrec_VertexBuffer vbuf;
 
-static HighPrec_VertexBuffer vbuf;
+} // end unnamed namespace
 
 
-CurvePlot::CurvePlot()
+CurvePlot::CurvePlot(const Renderer &renderer) :
+    m_renderer(renderer)
 {
 }
 
+void
+CurvePlot::deinit()
+{
+    vbuf.deinit();
+}
 
 /** Add a new sample to the path. If the sample time is less than the first time,
   * it is added at the end. If it is greater than the last time, it is appended
@@ -577,22 +386,24 @@ CurvePlot::addSample(const CurvePlotSample& sample)
         {
             const CurvePlotSample& lastSample = m_samples[m_samples.size() - 2];
             double dt = sample.t - lastSample.t;
-            Matrix4d coeff = cubicHermiteCoefficients(zeroExtend(lastSample.position),
-                                                      zeroExtend(sample.position),
-                                                      zeroExtend(lastSample.velocity * dt),
-                                                      zeroExtend(sample.velocity * dt));
-            Vector4d extents = coeff.cwiseAbs() * Vector4d(0.0, 1.0, 1.0, 1.0);
+            Eigen::Matrix4d coeff = cubicHermiteCoefficients(
+                zeroExtend(lastSample.position),
+                zeroExtend(sample.position),
+                zeroExtend(lastSample.velocity * dt),
+                zeroExtend(sample.velocity * dt));
+            Eigen::Vector4d extents = coeff.cwiseAbs() * Eigen::Vector4d(0.0, 1.0, 1.0, 1.0);
             m_samples[m_samples.size() - 1].boundingRadius = extents.norm();
         }
         else
         {
             const CurvePlotSample& nextSample = m_samples[1];
             double dt = nextSample.t - sample.t;
-            Matrix4d coeff = cubicHermiteCoefficients(zeroExtend(sample.position),
-                                                      zeroExtend(nextSample.position),
-                                                      zeroExtend(sample.velocity * dt),
-                                                      zeroExtend(nextSample.velocity * dt));
-            Vector4d extents = coeff.cwiseAbs() * Vector4d(0.0, 1.0, 1.0, 1.0);
+            Eigen::Matrix4d coeff = cubicHermiteCoefficients(
+                zeroExtend(sample.position),
+                zeroExtend(nextSample.position),
+                zeroExtend(sample.velocity * dt),
+                zeroExtend(nextSample.velocity * dt));
+            Eigen::Vector4d extents = coeff.cwiseAbs() * Eigen::Vector4d(0.0, 1.0, 1.0, 1.0);
             m_samples[1].boundingRadius = extents.norm();
         }
     }
@@ -639,41 +450,36 @@ CurvePlot::setDuration(double duration)
   * @param nearZ z coordinate of the near plane
   * @param farZ z coordinate of the far plane
   * @param viewFrustumPlaneNormals array of four normals (top, bottom, left, and right frustum planes)
-  * @param subdivisionThreshold
+  * @param subdivisionThreshold the threashhold for subdivision
   */
 void
-CurvePlot::render(const Affine3d& modelview,
+CurvePlot::render(const Eigen::Affine3d& modelview,
                   double nearZ,
                   double farZ,
-                  const Vector3d viewFrustumPlaneNormals[],
-                  double subdivisionThreshold) const
+                  const Eigen::Vector3d viewFrustumPlaneNormals[],
+                  double subdivisionThreshold,
+                  const Eigen::Vector4f& color) const
 {
     // Flag to indicate whether we need to issue a glBegin()
     bool restartCurve = true;
 
-    const Vector3d& p0_ = m_samples[0].position;
-    const Vector3d& v0_ = m_samples[0].velocity;
-    Vector4d p0 = modelview * Vector4d(p0_.x(), p0_.y(), p0_.z(), 1.0);
-    Vector4d v0 = modelview * Vector4d(v0_.x(), v0_.y(), v0_.z(), 0.0);
+    const Eigen::Vector3d& p0_ = m_samples[0].position;
+    const Eigen::Vector3d& v0_ = m_samples[0].velocity;
+    Eigen::Vector4d p0 = modelview * Eigen::Vector4d(p0_.x(), p0_.y(), p0_.z(), 1.0);
+    Eigen::Vector4d v0 = modelview * Eigen::Vector4d(v0_.x(), v0_.y(), v0_.z(), 0.0);
 
     HighPrec_Frustum viewFrustum(nearZ, farZ, viewFrustumPlaneNormals);
     HighPrec_RenderContext rc(vbuf, viewFrustum, subdivisionThreshold);
 
-#if DEBUG_ADAPTIVE_SPLINE
-    for (unsigned int i = 0; i < sizeof(SegmentCounts) / sizeof(SegmentCounts[0]); i++)
-        SegmentCounts[i] = 0;
-#endif
-
-    vbuf.createVertexBuffer();
-    vbuf.setup();
+    vbuf.setup(m_renderer, color);
 
     for (unsigned int i = 1; i < m_samples.size(); i++)
     {
         // Transform the points into camera space.
-        const Vector3d& p1_ = m_samples[i].position;
-        const Vector3d& v1_ = m_samples[i].velocity;
-        Vector4d p1 = modelview * Vector4d(p1_.x(), p1_.y(), p1_.z(), 1.0);
-        Vector4d v1 = modelview * Vector4d(v1_.x(), v1_.y(), v1_.z(), 0.0);
+        const Eigen::Vector3d& p1_ = m_samples[i].position;
+        const Eigen::Vector3d& v1_ = m_samples[i].velocity;
+        Eigen::Vector4d p1 = modelview * Eigen::Vector4d(p1_.x(), p1_.y(), p1_.z(), 1.0);
+        Eigen::Vector4d v1 = modelview * Eigen::Vector4d(v1_.x(), v1_.y(), v1_.z(), 0.0);
 
         // O(t) is an approximating function for this segment of
         // the orbit, with 0 <= t <= 1
@@ -689,7 +495,7 @@ CurvePlot::render(const Affine3d& modelview,
         // render it. Otherwise, it should be a performance win
         // to do a sphere-frustum cull test before subdividing and
         // rendering segment.
-        double minDistance = abs(p0.z()) - curveBoundingRadius;
+        double minDistance = std::abs(p0.z()) - curveBoundingRadius;
 
         // Render close segments as splines with adaptive subdivision. The
         // subdivisions eliminates kinks between line segments and also
@@ -698,9 +504,6 @@ CurvePlot::render(const Affine3d& modelview,
         // volume.
         if (curveBoundingRadius >= subdivisionThreshold * minDistance)
         {
-#if DEBUG_ADAPTIVE_SPLINE
-            ++SegmentCounts[0];
-#endif
             // Skip rendering this section if it lies outside the view
             // frustum.
             if (viewFrustum.cullSphere(p0, curveBoundingRadius))
@@ -714,17 +517,13 @@ CurvePlot::render(const Affine3d& modelview,
             else
             {
                 double dt = m_samples[i].t - m_samples[i - 1].t;
-                Matrix4d coeff = cubicHermiteCoefficients(p0, p1, v0 * dt, v1 * dt);
+                Eigen::Matrix4d coeff = cubicHermiteCoefficients(p0, p1, v0 * dt, v1 * dt);
 
                 restartCurve = rc.renderCubic(restartCurve, coeff, 0.0, 1.0, curveBoundingRadius, 1);
             }
         }
         else
         {
-#if DEBUG_ADAPTIVE_SPLINE
-            glColor4f(SplineColors[0][0], SplineColors[0][1], SplineColors[0][2], 1.0f);
-#endif
-
             // Apparent size of curve is small enough that we can approximate
             // it as a line.
 
@@ -741,7 +540,6 @@ CurvePlot::render(const Affine3d& modelview,
             {
                 if (restartCurve)
                 {
-                    vbuf.begin();
                     vbuf.vertex(p0);
                     restartCurve = false;
                 }
@@ -760,14 +558,6 @@ CurvePlot::render(const Affine3d& modelview,
 
     vbuf.flush();
     vbuf.finish();
-
-#if DEBUG_ADAPTIVE_SPLINE3
-    for (unsigned int i = 0; SegmentCounts[i] != 0 || i < 3; i++)
-    {
-        clog << i << ":" << SegmentCounts[i] << ", ";
-    }
-    clog << endl;
-#endif
 }
 
 
@@ -777,18 +567,19 @@ CurvePlot::render(const Affine3d& modelview,
   * @param nearZ z coordinate of the near plane
   * @param farZ z coordinate of the far plane
   * @param viewFrustumPlaneNormals array of four normals (top, bottom, left, and right frustum planes)
-  * @param subdivisionThreshold
+  * @param subdivisionThreshold the threashhold for subdivision
   * @param startTime the beginning of the time interval
   * @param endTime the end of the time interval
   */
 void
-CurvePlot::render(const Affine3d& modelview,
+CurvePlot::render(const Eigen::Affine3d& modelview,
                   double nearZ,
                   double farZ,
-                  const Vector3d viewFrustumPlaneNormals[],
+                  const Eigen::Vector3d viewFrustumPlaneNormals[],
                   double subdivisionThreshold,
                   double startTime,
-                  double endTime) const
+                  double endTime,
+                  const Eigen::Vector4f& color) const
 {
     // Flag to indicate whether we need to issue a glBegin()
     bool restartCurve = true;
@@ -805,16 +596,15 @@ CurvePlot::render(const Affine3d& modelview,
     if (startSample > 0)
         startSample--;
 
-    const Vector3d& p0_ = m_samples[startSample].position;
-    const Vector3d& v0_ = m_samples[startSample].velocity;
-    Vector4d p0 = modelview * Vector4d(p0_.x(), p0_.y(), p0_.z(), 1.0);
-    Vector4d v0 = modelview * Vector4d(v0_.x(), v0_.y(), v0_.z(), 0.0);
+    const Eigen::Vector3d& p0_ = m_samples[startSample].position;
+    const Eigen::Vector3d& v0_ = m_samples[startSample].velocity;
+    Eigen::Vector4d p0 = modelview * Eigen::Vector4d(p0_.x(), p0_.y(), p0_.z(), 1.0);
+    Eigen::Vector4d v0 = modelview * Eigen::Vector4d(v0_.x(), v0_.y(), v0_.z(), 0.0);
 
     HighPrec_Frustum viewFrustum(nearZ, farZ, viewFrustumPlaneNormals);
     HighPrec_RenderContext rc(vbuf, viewFrustum, subdivisionThreshold);
 
-    vbuf.createVertexBuffer();
-    vbuf.setup();
+    vbuf.setup(m_renderer, color);
 
     bool firstSegment = true;
     bool lastSegment = false;
@@ -822,10 +612,10 @@ CurvePlot::render(const Affine3d& modelview,
     for (unsigned int i = startSample + 1; i < m_samples.size() && !lastSegment; i++)
     {
         // Transform the points into camera space.
-        const Vector3d& p1_ = m_samples[i].position;
-        const Vector3d& v1_ = m_samples[i].velocity;
-        Vector4d p1 = modelview * Vector4d(p1_.x(), p1_.y(), p1_.z(), 1.0);
-        Vector4d v1 = modelview * Vector4d(v1_.x(), v1_.y(), v1_.z(), 0.0);
+        const Eigen::Vector3d& p1_ = m_samples[i].position;
+        const Eigen::Vector3d& v1_ = m_samples[i].velocity;
+        Eigen::Vector4d p1 = modelview * Eigen::Vector4d(p1_.x(), p1_.y(), p1_.z(), 1.0);
+        Eigen::Vector4d v1 = modelview * Eigen::Vector4d(v1_.x(), v1_.y(), v1_.z(), 0.0);
 
         if (endTime <= m_samples[i].t)
         {
@@ -874,7 +664,7 @@ CurvePlot::render(const Affine3d& modelview,
                 if (firstSegment)
                 {
                     t0 = (startTime - m_samples[i - 1].t) / dt;
-                    t0 = std::max(0.0, std::min(1.0, t0));
+                    t0 = std::clamp(t0, 0.0, 1.0);
                     firstSegment = false;
                 }
 
@@ -883,7 +673,7 @@ CurvePlot::render(const Affine3d& modelview,
                     t1 = (endTime - m_samples[i - 1].t) / dt;
                 }
 
-                Matrix4d coeff = cubicHermiteCoefficients(p0, p1, v0 * dt, v1 * dt);
+                Eigen::Matrix4d coeff = cubicHermiteCoefficients(p0, p1, v0 * dt, v1 * dt);
                 restartCurve = rc.renderCubic(restartCurve, coeff, t0, t1, curveBoundingRadius, 1);
             }
         }
@@ -907,7 +697,6 @@ CurvePlot::render(const Affine3d& modelview,
             {
                 if (restartCurve)
                 {
-                    vbuf.begin();
                     vbuf.vertex(p0);
                     restartCurve = false;
                 }
@@ -939,7 +728,7 @@ CurvePlot::render(const Affine3d& modelview,
   * @param nearZ z coordinate of the near plane
   * @param farZ z coordinate of the far plane
   * @param viewFrustumPlaneNormals array of four normals (top, bottom, left, and right frustum planes)
-  * @param subdivisionThreshold
+  * @param subdivisionThreshold the threashhold for subdivision
   * @param startTime the beginning of the time interval
   * @param endTime the end of the time interval
   * @param fadeStartTime points on the curve before this time are drawn with full opacity
@@ -953,7 +742,7 @@ CurvePlot::renderFaded(const Eigen::Affine3d& modelview,
                        double subdivisionThreshold,
                        double startTime,
                        double endTime,
-                       const Vector4f& color,
+                       const Eigen::Vector4f& color,
                        double fadeStartTime,
                        double fadeEndTime) const
 {
@@ -975,18 +764,17 @@ CurvePlot::renderFaded(const Eigen::Affine3d& modelview,
     double fadeDuration = fadeEndTime - fadeStartTime;
     double fadeRate = 1.0 / fadeDuration;
 
-    const Vector3d& p0_ = m_samples[startSample].position;
-    const Vector3d& v0_ = m_samples[startSample].velocity;
-    Vector4d p0 = modelview * Vector4d(p0_.x(), p0_.y(), p0_.z(), 1.0);
-    Vector4d v0 = modelview * Vector4d(v0_.x(), v0_.y(), v0_.z(), 0.0);
+    const Eigen::Vector3d& p0_ = m_samples[startSample].position;
+    const Eigen::Vector3d& v0_ = m_samples[startSample].velocity;
+    Eigen::Vector4d p0 = modelview * Eigen::Vector4d(p0_.x(), p0_.y(), p0_.z(), 1.0);
+    Eigen::Vector4d v0 = modelview * Eigen::Vector4d(v0_.x(), v0_.y(), v0_.z(), 0.0);
     double opacity0 = (m_samples[startSample].t - fadeStartTime) * fadeRate;
-    opacity0 = max(0.0, min(1.0, opacity0));
+    opacity0 = std::clamp(opacity0, 0.0, 1.0);
 
     HighPrec_Frustum viewFrustum(nearZ, farZ, viewFrustumPlaneNormals);
     HighPrec_RenderContext rc(vbuf, viewFrustum, subdivisionThreshold);
 
-    vbuf.createVertexBuffer();
-    vbuf.setup();
+    vbuf.setup(m_renderer, color);
 
     bool firstSegment = true;
     bool lastSegment = false;
@@ -994,12 +782,12 @@ CurvePlot::renderFaded(const Eigen::Affine3d& modelview,
     for (unsigned int i = startSample + 1; i < m_samples.size() && !lastSegment; i++)
     {
         // Transform the points into camera space.
-        const Vector3d& p1_ = m_samples[i].position;
-        const Vector3d& v1_ = m_samples[i].velocity;
-        Vector4d p1 = modelview * Vector4d(p1_.x(), p1_.y(), p1_.z(), 1.0);
-        Vector4d v1 = modelview * Vector4d(v1_.x(), v1_.y(), v1_.z(), 0.0);
+        const Eigen::Vector3d& p1_ = m_samples[i].position;
+        const Eigen::Vector3d& v1_ = m_samples[i].velocity;
+        Eigen::Vector4d p1 = modelview * Eigen::Vector4d(p1_.x(), p1_.y(), p1_.z(), 1.0);
+        Eigen::Vector4d v1 = modelview * Eigen::Vector4d(v1_.x(), v1_.y(), v1_.z(), 0.0);
         double opacity1 = (m_samples[i].t - fadeStartTime) * fadeRate;
-        opacity1 = max(0.0, min(1.0, opacity1));
+        opacity1 = std::clamp(opacity1, 0.0, 1.0);
 
         if (endTime <= m_samples[i].t)
         {
@@ -1020,7 +808,7 @@ CurvePlot::renderFaded(const Eigen::Affine3d& modelview,
         // render it. Otherwise, it should be a performance win
         // to do a sphere-frustum cull test before subdividing and
         // rendering segment.
-        double minDistance = abs(p0.z()) - curveBoundingRadius;
+        double minDistance = std::abs(p0.z()) - curveBoundingRadius;
 
         // Render close segments as splines with adaptive subdivision. The
         // subdivisions eliminates kinks between line segments and also
@@ -1048,7 +836,7 @@ CurvePlot::renderFaded(const Eigen::Affine3d& modelview,
                 if (firstSegment)
                 {
                     t0 = (startTime - m_samples[i - 1].t) / dt;
-                    t0 = std::max(0.0, std::min(1.0, t0));
+                    t0 = std::clamp(t0, 0.0, 1.0);
                     firstSegment = false;
                 }
 
@@ -1057,7 +845,7 @@ CurvePlot::renderFaded(const Eigen::Affine3d& modelview,
                     t1 = (endTime - m_samples[i - 1].t) / dt;
                 }
 
-                Matrix4d coeff = cubicHermiteCoefficients(p0, p1, v0 * dt, v1 * dt);
+                Eigen::Matrix4d coeff = cubicHermiteCoefficients(p0, p1, v0 * dt, v1 * dt);
                 restartCurve = rc.renderCubicFaded(restartCurve, coeff,
                                                    t0, t1,
                                                    color,
@@ -1085,11 +873,10 @@ CurvePlot::renderFaded(const Eigen::Affine3d& modelview,
             {
                 if (restartCurve)
                 {
-                    vbuf.begin();
-                    vbuf.vertex(p0, Vector4f(color.x(), color.y(), color.z(), color.w() * float(opacity0)));
+                    vbuf.vertex(p0, static_cast<float>(opacity0));
                     restartCurve = false;
                 }
-                vbuf.vertex(p1, Vector4f(color.x(), color.y(), color.z(), color.w() * float(opacity1)));
+                vbuf.vertex(p1, static_cast<float>(opacity1));
             }
         }
 

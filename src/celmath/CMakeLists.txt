@@ -6,20 +6,12 @@ set(CELMATH_SOURCES
   geomutil.h
   intersect.h
   mathlib.h
-  perlin.cpp
-  perlin.h
+  randutils.cpp
+  randutils.h
   ray.h
   solve.h
   sphere.h
+  vecgl.h
 )
 
-add_library(celmath STATIC ${CELMATH_SOURCES})
-cotire(celmath)
-#[[
-add_library(celmath SHARED ${CELMATH_SOURCES})
-set_target_properties(celmath PROPERTIES
-  VERSION ${VERSION}
-  SOVERSION ${VERSION}
-)
-]]#
-#install(TARGETS celmath LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
+add_library(celmath OBJECT ${CELMATH_SOURCES})

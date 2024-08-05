@@ -7,26 +7,88 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#ifndef _CELENGINE_SHADERMANAGER_H_
-#define _CELENGINE_SHADERMANAGER_H_
+#pragma once
 
+#include <array>
+#include <cstdint>
 #include <map>
-#include <iostream>
-#include <celengine/glshader.h>
-#include <celengine/lightenv.h>
-#include <celengine/atmosphere.h>
+#include <string>
+
+#include <Eigen/Core>
 #include <Eigen/Geometry>
 
-#define ADVANCED_CLOUD_SHADOWS 0
+#include <celutil/color.h>
+#include <celutil/flag.h>
+#include <celengine/glshader.h>
 
+class Atmosphere;
+class LightingState;
+
+enum class TexUsage : std::uint32_t
+{
+    None                    =       0,
+    DiffuseTexture          =    0x01,
+    SpecularTexture         =    0x02,
+    NormalTexture           =    0x04,
+    NightTexture            =    0x08,
+    SpecularInDiffuseAlpha  =    0x10,
+    RingShadowTexture       =    0x20,
+    OverlayTexture          =    0x40,
+    CloudShadowTexture      =    0x80,
+    CompressedNormalTexture =   0x100,
+    EmissiveTexture         =   0x200,
+    ShadowMapTexture        =   0x400,
+    VertexOpacities         =   0x800,
+    VertexColors            =  0x1000,
+    Scattering              =  0x2000,
+    PointSprite             =  0x4000,
+    SharedTextureCoords     =  0x8000,
+    StaticPointSize         = 0x10000,
+    LineAsTriangles         = 0x20000,
+    TextureCoordTransform   = 0x40000,
+};
+
+ENUM_CLASS_BITWISE_OPS(TexUsage);
+
+enum class LightingModel : std::uint16_t
+{
+    DiffuseModel          = 0x0001,
+    RingIllumModel        = 0x0004,
+    PerPixelSpecularModel = 0x0008,
+    OrenNayarModel        = 0x0010,
+    AtmosphereModel       = 0x0020,
+    LunarLambertModel     = 0x0040,
+    ParticleDiffuseModel  = 0x0080,
+    EmissiveModel         = 0x0100,
+    ParticleModel         = 0x0200,
+    UnlitModel            = 0x0400,
+};
+
+ENUM_CLASS_BITWISE_OPS(LightingModel);
+
+enum class LightingEffects : std::uint16_t
+{
+    None                      = 0,
+    VolumetricScattering      = 0x0001,
+    VolumetricAbsorption      = 0x0002,
+    VolumetricEmission        = 0x0004,
+};
+
+enum class FisheyeOverrideMode : int
+{
+    None     = 0,
+    Enabled  = 1,
+    Disabled = 2,
+};
 
 class ShaderProperties
 {
  public:
-    ShaderProperties();
+    ShaderProperties() = default;
     bool usesShadows() const;
     bool usesFragmentLighting() const;
     bool usesTangentSpaceLighting() const;
+    bool usePointSize() const;
 
     unsigned int getEclipseShadowCountForLight(unsigned int lightIndex) const;
     void setEclipseShadowCountForLight(unsigned int lightIndex, unsigned int shadowCount);
@@ -40,62 +102,22 @@ class ShaderProperties
     void setCloudShadowForLight(unsigned int lightIndex, bool enabled);
     bool hasCloudShadowForLight(unsigned int lightIndex) const;
     bool hasCloudShadows() const;
+    bool hasShadowMap() const;
 
     bool hasShadowsForLight(unsigned int) const;
     bool hasSharedTextureCoords() const;
+    bool hasTextureCoordTransform() const;
     bool hasSpecular() const;
     bool hasScattering() const;
     bool isViewDependent() const;
 
- enum
- {
-     DiffuseTexture          =   0x01,
-     SpecularTexture         =   0x02,
-     NormalTexture           =   0x04,
-     NightTexture            =   0x08,
-     SpecularInDiffuseAlpha  =   0x10,
-     RingShadowTexture       =   0x20,
-     OverlayTexture          =   0x40,
-     CloudShadowTexture      =   0x80,
-     CompressedNormalTexture =  0x100,
-     EmissiveTexture         =  0x200,
-     VertexOpacities         =  0x800,
-     VertexColors            = 0x1000,
-     Scattering              = 0x2000,
-     PointSprite             = 0x4000,
-     SharedTextureCoords     = 0x8000,
- };
+public:
+    std::uint16_t nLights{ 0 };
+    LightingModel lightModel{ LightingModel::DiffuseModel };
+    TexUsage texUsage{ TexUsage::None };
 
- enum
- {
-     DiffuseModel          = 0,
-     SpecularModel         = 1,
-     RingIllumModel        = 2,
-     PerPixelSpecularModel = 3,
-     OrenNayarModel        = 4,
-     AtmosphereModel       = 5,
-     LunarLambertModel     = 6,
-     ParticleDiffuseModel  = 7,
-     EmissiveModel         = 8,
-     ParticleModel         = 9,
- };
-
- enum
- {
-     VolumetricScatteringEffect      = 0x0001,
-     VolumetricAbsorptionEffect      = 0x0002,
-     VolumetricEmissionEffect        = 0x0004,
- };
-
- enum
- {
-     UniformColor = 0x0001,
- };
-
- public:
-    unsigned short nLights;
-    unsigned short texUsage;
-    unsigned short lightModel;
+    // Effects that may be applied with any light model
+    LightingEffects effects{ LightingEffects::None };
 
     // Eight bits per light, up to four lights
     // For each light:
@@ -103,19 +125,12 @@ class ShaderProperties
     //   Bit  2,   on if there are ring shadows
     //   Bit  3,   on for self shadowing
     //   Bit  4,   on for cloud shadows
-    uint32_t shadowCounts;
+    std::uint32_t shadowCounts{ 0 };
 
-    // Effects that may be applied with any light model
-    unsigned short effects;
-
-    bool staticShader{ false };
-    uint32_t staticProps{ 0 };
+    FisheyeOverrideMode fishEyeOverride { FisheyeOverrideMode::None };
 
  private:
-    enum
-    {
-        ShadowBitsPerLight = 4,
-    };
+    static constexpr unsigned int ShadowBitsPerLight = 8;
 
     enum
     {
@@ -128,14 +143,17 @@ class ShaderProperties
         AnySelfShadowMask    = 0x08080808,
         AnyCloudShadowMask   = 0x10101010,
     };
+
+    friend class ShaderManager;
 };
 
+constexpr inline unsigned int MaxShaderLights = 4;
+constexpr inline unsigned int MaxShaderEclipseShadows = 3;
 
-static const unsigned int MaxShaderLights = 4;
-static const unsigned int MaxShaderEclipseShadows = 3;
 struct CelestiaGLProgramLight
 {
     Vec3ShaderParameter direction;
+    Vec3ShaderParameter color;
     Vec3ShaderParameter diffuse;
     Vec3ShaderParameter specular;
     Vec3ShaderParameter halfVector;
@@ -150,9 +168,16 @@ struct CelestiaGLProgramShadow
     FloatShaderParameter maxDepth;
 };
 
+struct CelestiaGLProgramTextureTransform
+{
+    Vec2ShaderParameter base;
+    Vec2ShaderParameter delta;
+};
+
 class CelestiaGLProgram
 {
- public:
+public:
+    CelestiaGLProgram(GLProgram& _program);
     CelestiaGLProgram(GLProgram& _program, const ShaderProperties&);
     ~CelestiaGLProgram();
 
@@ -161,38 +186,37 @@ class CelestiaGLProgram
     void setLightParameters(const LightingState& ls,
                             Color materialDiffuse,
                             Color materialSpecular,
-                            Color materialEmissive
-#ifdef USE_HDR
-                           ,float nightLightScale = 1.0f
-#endif
-                            );
+                            Color materialEmissive);
     void setEclipseShadowParameters(const LightingState& ls,
                                     const Eigen::Vector3f& scale,
                                     const Eigen::Quaternionf& orientation);
     void setAtmosphereParameters(const Atmosphere& atmosphere,
                                  float atmPlanetRadius,
                                  float objRadius);
+    void setMVPMatrices(const Eigen::Matrix4f& p, const Eigen::Matrix4f& m = Eigen::Matrix4f::Identity());
 
- enum
- {
-    VertexCoordAttributeIndex = 0,
-    TangentAttributeIndex     = 6,
-    PointSizeAttributeIndex   = 7,
- };
+    enum
+    {
+        VertexCoordAttributeIndex   = 0,
+        NormalAttributeIndex        = 1,
+        TextureCoord0AttributeIndex = 2,
+        TextureCoord1AttributeIndex = 3,
+        TextureCoord2AttributeIndex = 4,
+        TextureCoord3AttributeIndex = 5,
+        TangentAttributeIndex       = 6,
+        PointSizeAttributeIndex     = 7,
+        ColorAttributeIndex         = 8,
+        IntensityAttributeIndex     = 9,
+        NextVCoordAttributeIndex    = 10,
+        ScaleFactorAttributeIndex   = 11,
+    };
 
- public:
     CelestiaGLProgramLight lights[MaxShaderLights];
-    Vec3ShaderParameter fragLightColor[MaxShaderLights];
-    Vec3ShaderParameter fragLightSpecColor[MaxShaderLights];
-    FloatShaderParameter fragLightBrightness[MaxShaderLights];
     FloatShaderParameter ringShadowLOD[MaxShaderLights];
     Vec3ShaderParameter eyePosition;
     FloatShaderParameter shininess;
     Vec3ShaderParameter ambientColor;
     FloatShaderParameter opacity;
-#ifdef USE_HDR
-    FloatShaderParameter nightLightScale;
-#endif
 
     FloatShaderParameter ringWidth;
     FloatShaderParameter ringRadius;
@@ -210,6 +234,8 @@ class CelestiaGLProgram
     // Height of cloud layer above planet, in units of object radius
     FloatShaderParameter cloudHeight;
     FloatShaderParameter shadowTextureOffset;
+
+    std::array<CelestiaGLProgramTextureTransform, 4> texCoordTransforms;
 
     // Parameters for atmospheric scattering; all distances are normalized for
     // a unit sphere.
@@ -244,34 +270,68 @@ class CelestiaGLProgram
     // Scale factor for point sprites
     FloatShaderParameter pointScale;
 
+    // Used to draw line as triangles
+    FloatShaderParameter lineWidthX;
+    FloatShaderParameter lineWidthY;
+
     // Color sent as a uniform
     Vec4ShaderParameter color;
 
+    // Matrix used to project to light space
+    Mat4ShaderParameter ShadowMatrix0;
+
     CelestiaGLProgramShadow shadows[MaxShaderLights][MaxShaderEclipseShadows];
 
- private:
+    FloatShaderParameter floatParam(const char*);
+    IntegerShaderParameter intParam(const char*);
+    IntegerShaderParameter samplerParam(const char*);
+    Vec2ShaderParameter vec2Param(const char*);
+    Vec3ShaderParameter vec3Param(const char*);
+    Vec4ShaderParameter vec4Param(const char*);
+    Mat3ShaderParameter mat3Param(const char*);
+    Mat4ShaderParameter mat4Param(const char*);
+
+    Mat4ShaderParameter ModelViewMatrix;
+    Mat4ShaderParameter ProjectionMatrix;
+    Mat4ShaderParameter MVPMatrix;
+
+    int attribIndex(const char*) const;
+
+private:
+    void initCommonParameters();
     void initParameters();
     void initSamplers();
-
-    FloatShaderParameter floatParam(const std::string&);
-    Vec3ShaderParameter vec3Param(const std::string&);
-    Vec4ShaderParameter vec4Param(const std::string&);
 
     GLProgram* program;
     const ShaderProperties props;
 };
 
-
 class ShaderManager
 {
- public:
+public:
+    struct GeomShaderParams
+    {
+        int inputType;
+        int outType;
+        int nOutVertices;
+    };
+
     ShaderManager();
     ~ShaderManager();
 
     CelestiaGLProgram* getShader(const ShaderProperties&);
+    CelestiaGLProgram* getShader(std::string_view);
+    CelestiaGLProgram* getShader(std::string_view, std::string_view, std::string_view);
+    CelestiaGLProgram* getShaderGL3(std::string_view, const GeomShaderParams* = nullptr);
+    CelestiaGLProgram* getShaderGL3(std::string_view, std::string_view, std::string_view, std::string_view);
 
- private:
+    void setFisheyeEnabled(bool enabled);
+
+private:
     CelestiaGLProgram* buildProgram(const ShaderProperties&);
+    CelestiaGLProgram* buildProgram(std::string_view, std::string_view);
+    CelestiaGLProgram* buildProgramGL3(std::string_view, std::string_view);
+    CelestiaGLProgram* buildProgramGL3(std::string_view, std::string_view, std::string_view, const GeomShaderParams* = nullptr);
 
     GLVertexShader* buildVertexShader(const ShaderProperties&);
     GLFragmentShader* buildFragmentShader(const ShaderProperties&);
@@ -288,10 +348,8 @@ class ShaderManager
     GLVertexShader* buildParticleVertexShader(const ShaderProperties&);
     GLFragmentShader* buildParticleFragmentShader(const ShaderProperties&);
 
-    GLVertexShader* buildStaticVertexShader(const ShaderProperties&);
-    GLFragmentShader* buildStaticFragmentShader(const ShaderProperties&);
+    std::map<ShaderProperties, CelestiaGLProgram*> dynamicShaders;
+    std::map<std::string_view, CelestiaGLProgram*> staticShaders;
 
-    std::map<ShaderProperties, CelestiaGLProgram*> shaders;
+    bool fisheyeEnabled { false };
 };
-
-#endif // _CELENGINE_SHADERMANAGER_H_

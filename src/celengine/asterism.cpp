@@ -7,284 +7,219 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#include <config.h>
-#include <cstring>
-#include <GL/glew.h>
-#include <celutil/util.h>
-#include <celutil/debug.h>
 #include "asterism.h"
-#include "parser.h"
-#include "vecgl.h"
-#include "render.h"
 
-using namespace std;
+#include <memory>
+#include <string_view>
+#include <utility>
 
+#include <celutil/gettext.h>
+#include <celutil/greek.h>
+#include <celutil/logger.h>
+#include <celutil/tokenizer.h>
+#include "star.h"
+#include "stardb.h"
 
-Asterism::Asterism(string _name) :
-    name(_name)
+using celestia::util::GetLogger;
+
+namespace
 {
-    i18nName = dgettext("celestia_constellations", _name.c_str());
+
+bool
+readChain(Tokenizer& tokenizer,
+          Asterism::Chain& chain,
+          const StarDatabase& starDB,
+          std::string_view astName)
+{
+    for (;;)
+    {
+        if (auto tokenType = tokenizer.nextToken(); tokenType == Tokenizer::TokenEndArray)
+            break;
+
+        auto starName = tokenizer.getStringValue();
+        if (!starName.has_value())
+        {
+            GetLogger()->error("Error parsing asterism {} chain: expected string\n", astName);
+            return false;
+        }
+
+        const Star* star = starDB.find(*starName, false);
+        if (!star)
+            star = starDB.find(ReplaceGreekLetterAbbr(*starName), false);
+
+        if (star)
+            chain.push_back(star->getPosition());
+        else
+            GetLogger()->warn("Error loading star \"{}\" for asterism \"{}\"\n", *starName, astName);
+    }
+
+    return true;
 }
 
-string Asterism::getName(bool i18n) const
+bool
+readChains(Tokenizer& tokenizer,
+           std::vector<Asterism::Chain>& chains,
+           const StarDatabase& starDB,
+           std::string_view astName)
 {
-    return i18n ? i18nName : name;
+    if (tokenizer.nextToken() != Tokenizer::TokenBeginArray)
+    {
+        GetLogger()->error("Error parsing asterism \"{}\": expected array\n", astName);
+        return false;
+    }
+
+    for (;;)
+    {
+        auto tokenType = tokenizer.nextToken();
+        if (tokenType == Tokenizer::TokenEndArray)
+            break;
+
+        if (tokenType != Tokenizer::TokenBeginArray)
+        {
+            GetLogger()->error("Error parsing asterism {} chain: expected array\n", astName);
+            return false;
+        }
+
+        Asterism::Chain chain;
+        if (!readChain(tokenizer, chain, starDB, astName))
+            return false;
+
+        // skip empty (without or only with a single star) chains - no lines can be drawn for these
+        if (chain.size() > 1)
+            chains.push_back(std::move(chain));
+        else
+            GetLogger()->warn("Empty or single-element chain found in asterism \"{}\"\n", astName);
+    }
+
+    return true;
 }
 
-int Asterism::getChainCount() const
+} // end unnamed namespace
+
+Asterism::Asterism(std::string&& name, std::vector<Chain>&& chains) :
+    m_name(std::move(name)),
+    m_chains(std::move(chains))
 {
-    return chains.size();
+#ifdef ENABLE_NLS
+    if (std::string_view localizedName(D_(m_name.c_str())); localizedName != m_name)
+        m_i18nName = localizedName;
+#endif
+
+    // Compute average position of first chain for label positioning
+    for (const auto& pos : m_chains.front())
+    {
+        m_averagePosition += pos;
+    }
+
+    m_averagePosition.normalize();
 }
 
-const Asterism::Chain& Asterism::getChain(int index) const
+std::string_view
+Asterism::getName(bool i18n) const
 {
-    return *chains[index];
+#ifdef ENABLE_NLS
+    return i18n && !m_i18nName.empty() ? m_i18nName : m_name;
+#else
+    return m_name;
+#endif
 }
 
-void Asterism::addChain(Asterism::Chain& chain)
+int
+Asterism::getChainCount() const
 {
-    chains.push_back(&chain);
+    return static_cast<int>(m_chains.size());
 }
 
+const Asterism::Chain&
+Asterism::getChain(int index) const
+{
+    return m_chains[index];
+}
 
 /*! Return whether the constellation is visible.
  */
-bool Asterism::getActive() const
+bool
+Asterism::getActive() const
 {
-    return active;
+    return m_active;
 }
-
 
 /*! Set whether or not the constellation is visible.
  */
-void Asterism::setActive(bool _active)
+void
+Asterism::setActive(bool _active)
 {
-    active = _active;
+    m_active = _active;
 }
-
 
 /*! Get the override color for this constellation.
  */
-Color Asterism::getOverrideColor() const
+Color
+Asterism::getOverrideColor() const
 {
-    return color;
+    return m_color;
 }
-
 
 /*! Set an override color for the constellation. If this method isn't
  *  called, the constellation is drawn in the render's default color
  *  for contellations. Calling unsetOverrideColor will remove the
  *  override color.
  */
-void Asterism::setOverrideColor(Color c)
+void
+Asterism::setOverrideColor(const Color &c)
 {
-    color = c;
-    useOverrideColor = true;
+    m_color = c;
+    m_useOverrideColor = true;
 }
-
 
 /*! Make this constellation appear in the default color (undoing any
  *  calls to setOverrideColor.
  */
-void Asterism::unsetOverrideColor()
+void
+Asterism::unsetOverrideColor()
 {
-    useOverrideColor = false;
+    m_useOverrideColor = false;
 }
-
 
 /*! Return true if this constellation has a custom color, or false
  *  if it should be drawn in the default color.
  */
-bool Asterism::isColorOverridden() const
+bool
+Asterism::isColorOverridden() const
 {
-    return useOverrideColor;
+    return m_useOverrideColor;
 }
 
-/*! Draw visible asterisms.
- */
-void AsterismList::render(const Color& defaultColor, const Renderer& renderer)
+const Eigen::Vector3f&
+Asterism::averagePosition() const
 {
-    if (vboId == 0)
-    {
-        if (!prepared)
-            prepare();
-
-        if (vtx_num == 0)
-            return;
-
-        glGenBuffers(1, &(vboId));
-        glBindBuffer(GL_ARRAY_BUFFER, vboId);
-        glBufferData(GL_ARRAY_BUFFER, vtx_num * 3 * sizeof(GLfloat), vtx_buf, GL_STATIC_DRAW);
-        cleanup();
-
-        shadprop.staticShader = true;
-        shadprop.staticProps  = ShaderProperties::UniformColor;
-    }
-    else
-    {
-        glBindBuffer(GL_ARRAY_BUFFER, vboId);
-    }
-
-    CelestiaGLProgram* prog = renderer.getShaderManager().getShader(shadprop);
-    if (prog == nullptr)
-        return;
-
-    prog->use();
-    prog->color = defaultColor.toVector4();
-    glEnableVertexAttribArray(CelestiaGLProgram::VertexCoordAttributeIndex);
-    glVertexAttribPointer(CelestiaGLProgram::VertexCoordAttributeIndex,
-                          3, GL_FLOAT, GL_FALSE, 0, 0);
-    glDrawArrays(GL_LINES, 0, vtx_num);
-
-    ptrdiff_t offset = 0;
-    float opacity = defaultColor.alpha();
-    for (const auto ast : *this)
-    {
-        if (!ast->getActive() || !ast->isColorOverridden())
-        {
-            offset += ast->vertex_count;
-            continue;
-        }
-
-        prog->color = Color(ast->getOverrideColor(), opacity).toVector4();
-        glVertexAttribPointer(CelestiaGLProgram::VertexCoordAttributeIndex,
-                              3, GL_FLOAT, GL_FALSE, 0,
-                              (const void*)(offset*3*sizeof(GLfloat)));
-        glDrawArrays(GL_LINES, 0, ast->vertex_count);
-        offset += ast->vertex_count;
-    }
-
-    glDisableVertexAttribArray(CelestiaGLProgram::VertexCoordAttributeIndex);
-    glUseProgram(0);
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    return m_averagePosition;
 }
 
-
-void AsterismList::prepare()
+std::unique_ptr<AsterismList>
+ReadAsterismList(std::istream& in, const StarDatabase& starDB)
 {
-    if (prepared)
-        return;
-
-    // calculate required vertices number
-    vtx_num = 0;
-    for (const auto ast : *this)
-    {
-        uint16_t ast_vtx_num = 0;
-        for (int k = 0; k < ast->getChainCount(); k++)
-        {
-            // as we use GL_LINES we should double the number of vertices
-            // as we don't need closed figures we have only one copy of
-            // the 1st and last vertexes
-            auto s = (uint16_t) ast->getChain(k).size();
-            if (s > 1)
-                ast_vtx_num += 2 * s - 2;
-        }
-
-        ast->vertex_count = ast_vtx_num;
-        vtx_num += ast_vtx_num;
-    }
-
-    if (vtx_num == 0)
-        return;
-
-    vtx_buf = new GLfloat[vtx_num * 3];
-    GLfloat* ptr = vtx_buf;
-
-    for (const auto ast : *this)
-    {
-        for (int k = 0; k < ast->getChainCount(); k++)
-        {
-            const auto& chain = ast->getChain(k);
-
-            // skip empty (without starts or only with one star) chains
-            if (chain.size() <= 1)
-                continue;
-
-            memcpy(ptr, chain[0].data(), 3 * sizeof(float));
-            ptr += 3;
-            for (unsigned i = 1; i < chain.size() - 1; i++)
-            {
-                memcpy(ptr,     chain[i].data(), 3 * sizeof(float));
-                memcpy(ptr + 3, chain[i].data(), 3 * sizeof(float));
-                ptr += 6;
-            }
-            memcpy(ptr, chain[chain.size() - 1].data(), 3 * sizeof(float));
-            ptr += 3;
-        }
-    }
-
-    prepared = true;
-}
-
-void AsterismList::cleanup()
-{
-    delete[] vtx_buf;
-    // TODO: delete chains
-}
-
-
-AsterismList* ReadAsterismList(istream& in, const StarDatabase& stardb)
-{
-    auto* asterisms = new AsterismList();
+    auto asterisms = std::make_unique<AsterismList>();
     Tokenizer tokenizer(&in);
-    Parser parser(&tokenizer);
 
     while (tokenizer.nextToken() != Tokenizer::TokenEnd)
     {
-        if (tokenizer.getTokenType() != Tokenizer::TokenString)
+        auto tokenValue = tokenizer.getStringValue();
+        if (!tokenValue.has_value())
         {
-            DPRINTF(0, "Error parsing asterism file.\n");
-            for_each(asterisms->begin(), asterisms->end(), deleteFunc<Asterism*>());
-            delete asterisms;
-            return nullptr;
+            GetLogger()->error("Error parsing asterism file: expected string\n");
+            return asterisms;
         }
 
-        string name = tokenizer.getStringValue();
-        Asterism* ast = new Asterism(name);
+        std::string astName(*tokenValue);
+        std::vector<Asterism::Chain> chains;
+        if (!readChains(tokenizer, chains, starDB, astName))
+            return asterisms;
 
-        Value* chainsValue = parser.readValue();
-        if (chainsValue == nullptr || chainsValue->getType() != Value::ArrayType)
-        {
-            DPRINTF(0, "Error parsing asterism %s\n", name.c_str());
-            for_each(asterisms->begin(), asterisms->end(), deleteFunc<Asterism*>());
-            delete ast;
-            delete asterisms;
-            delete chainsValue;
-            return nullptr;
-        }
-
-        Array* chains = chainsValue->getArray();
-
-        for (const auto chain : *chains)
-        {
-            if (chain->getType() == Value::ArrayType)
-            {
-                Array* a = chain->getArray();
-                // skip empty (without or only with a single star) chains
-                if (a->size() <= 1)
-                    continue;
-
-                Asterism::Chain* new_chain = new Asterism::Chain();
-                for (const auto i : *a)
-                {
-                    if (i->getType() == Value::StringType)
-                    {
-                        Star* star = stardb.find(i->getString());
-                        if (star == nullptr)
-                            star = stardb.find(ReplaceGreekLetterAbbr(i->getString()));
-                        if (star != nullptr)
-                            new_chain->push_back(star->getPosition());
-                        else DPRINTF(0, "Error loading star \"%s\" for asterism \"%s\".\n", name.c_str(), i->getString().c_str());
-                    }
-                }
-
-                ast->addChain(*new_chain);
-            }
-        }
-
-        asterisms->push_back(ast);
-
-        delete chainsValue;
+        if (chains.empty())
+            GetLogger()->warn("No valid chains found for asterism \"{}\"\n", astName);
+        else
+            asterisms->emplace_back(std::move(astName), std::move(chains));
     }
 
     return asterisms;

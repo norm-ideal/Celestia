@@ -8,8 +8,13 @@
  ***************************************************************************/
 
 
+#include <QString>
 #include <QTranslator>
-#include <celutil/util.h>
+
+#include <celutil/gettext.h>
+
+namespace celestia::qt
+{
 
 class CelestiaQTranslator : public QTranslator
 {
@@ -22,8 +27,10 @@ class CelestiaQTranslator : public QTranslator
 QString
 CelestiaQTranslator::translate(const char*,
                                const char *msgid,
-                               const char*,
+                               const char *disambiguation,
                                int) const
 {
-    return QString(gettext(msgid));
+    return disambiguation != nullptr ? CX_(disambiguation, msgid) : _(msgid);
 }
+
+} // end namespace celestia::qt

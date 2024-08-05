@@ -1,5 +1,6 @@
 // wineclipses.cpp by Kendrix <kendrix@wanadoo.fr>
 // modified by Chris Laurel
+// modified by Celestia Development Team
 //
 // Compute Solar Eclipses for our Solar System planets
 //
@@ -8,78 +9,95 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#include <string>
-#include <sstream>
-#include <algorithm>
-#include <set>
-#include <cassert>
-#include <windows.h>
-#include <commctrl.h>
-#include "celestia/eclipsefinder.h"
 #include "wineclipses.h"
-#include "res/resource.h"
-#include "celmath/geomutil.h"
-#include "celutil/util.h"
-#include "celutil/winutil.h"
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <string_view>
+#include <vector>
+
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 
-using namespace Eigen;
-using namespace std;
+#include <fmt/format.h>
+#ifdef _UNICODE
+#include <fmt/xchar.h>
+#endif
 
-WNDPROC oldListViewProc;
+#include <celastro/date.h>
+#include <celengine/body.h>
+#include <celengine/star.h>
+#include <celengine/stardb.h>
+#include <celengine/univcoord.h>
+#include <celengine/universe.h>
+#include <celestia/celestiacore.h>
+#include <celmath/geomutil.h>
+#include <celmath/mathlib.h>
+#include <celutil/array_view.h>
+#include <celutil/gettext.h>
 
-static vector<Eclipse> eclipseList;
+#include <commctrl.h>
 
-extern void SetMouseCursor(LPCTSTR lpCursor);
+#include "res/resource.h"
+#include "datetimehelpers.h"
+#include "winuiutils.h"
 
-char* MonthNames[12] =
+using namespace std::string_view_literals;
+
+namespace celestia::win32
 {
-    "Jan", "Feb", "Mar", "Apr",
-    "May", "Jun", "Jul", "Aug",
-    "Sep", "Oct", "Nov", "Dec"
+
+namespace
+{
+
+constexpr auto TargetBodyCount = static_cast<std::size_t>(EclipseFinderDialog::TargetBody::Count_);
+constexpr std::array<std::string_view, TargetBodyCount> TargetNames
+{
+    "Earth"sv,
+    "Jupiter"sv,
+    "Saturn"sv,
+    "Uranus"sv,
+    "Neptune"sv,
+    "Pluto"sv,
 };
 
-bool InitEclipseFinderColumns(HWND listView)
+bool
+InitEclipseFinderColumns(HWND listView)
 {
-    LVCOLUMN lvc;
-    LVCOLUMN columns[5];
+    constexpr std::size_t numColumns = 5;
 
-    lvc.mask = LVCF_FMT | LVCF_WIDTH | LVCF_TEXT | LVCF_SUBITEM;
-    lvc.fmt = LVCFMT_CENTER;
-    lvc.pszText = "";
-
-    int nColumns = sizeof(columns) / sizeof(columns[0]);
-    int i;
-
-    for (i = 0; i < nColumns; i++)
-        columns[i] = lvc;
-
-    bind_textdomain_codeset("celestia", CurrentCP());
-    columns[0].pszText = _("Planet");
-    columns[0].cx = 65;
-    columns[1].pszText = _("Satellite");
-    columns[1].cx = 65;
-    columns[2].pszText = _("Date");
-    columns[2].cx = 80;
-    columns[3].pszText = _("Start");
-    columns[3].cx = 55;
-    columns[4].pszText = _("Duration");
-    columns[4].cx = 135;
-    bind_textdomain_codeset("celestia", "UTF8");
-
-    for (i = 0; i < nColumns; i++)
+    std::array<tstring, numColumns> headers
     {
-        columns[i].iSubItem = i;
-        if (ListView_InsertColumn(listView, i, &columns[i]) == -1)
+        UTF8ToTString(_("Body")),
+        UTF8ToTString(_("Occulter")),
+        UTF8ToTString(_("Date")),
+        UTF8ToTString(_("Start")),
+        UTF8ToTString(_("Duration")),
+    };
+
+    constexpr std::array<int, numColumns> widths
+    {
+        65, 65, 80, 55, 135
+    };
+
+    for (std::size_t i = 0; i < numColumns; ++i)
+    {
+        LVCOLUMN lvc;
+        lvc.mask = LVCF_FMT | LVCF_WIDTH | LVCF_TEXT | LVCF_SUBITEM;
+        lvc.fmt = LVCFMT_CENTER;
+        lvc.cx = DpToPixels(widths[i], listView);
+        lvc.pszText = const_cast<TCHAR*>(headers[i].c_str());
+        lvc.iSubItem = static_cast<int>(i);
+        if (ListView_InsertColumn(listView, static_cast<int>(i), &lvc) == -1)
             return false;
     }
 
     return true;
 }
 
-
-bool InitEclipseFinderItems(HWND listView, const vector<Eclipse>& eclipses)
+bool
+InitEclipseFinderItems(HWND listView, const std::vector<Eclipse>& eclipses)
 {
     LVITEM lvi;
 
@@ -92,22 +110,20 @@ bool InitEclipseFinderItems(HWND listView, const vector<Eclipse>& eclipses)
     {
         lvi.iItem = i;
         lvi.iSubItem = 0;
-        lvi.lParam = (LPARAM) &(eclipses[i]);
+        lvi.lParam = reinterpret_cast<LPARAM>(&(eclipses[i]));
         ListView_InsertItem(listView, &lvi);
     }
 
     return true;
 }
 
-
-static char callbackScratch[256];
-void EclipseFinderDisplayItem(LPNMLVDISPINFOA nm)
+void
+EclipseFinderDisplayItem(NMLVDISPINFO* nm, util::array_view<tstring> monthNames)
 {
-
-    Eclipse* eclipse = reinterpret_cast<Eclipse*>(nm->item.lParam);
+    auto eclipse = reinterpret_cast<const Eclipse*>(nm->item.lParam);
     if (eclipse == NULL)
     {
-        nm->item.pszText = "";
+        nm->item.pszText[0] = TEXT('\0');
         return;
     }
 
@@ -115,162 +131,144 @@ void EclipseFinderDisplayItem(LPNMLVDISPINFOA nm)
     {
     case 0:
         {
-            strncpy(callbackScratch, UTF8ToCurrentCP(_(eclipse->planete.c_str())).c_str(), sizeof(callbackScratch) - 1);
-            nm->item.pszText = callbackScratch;
+            int length = UTF8ToTChar(eclipse->receiver->getName(true), nm->item.pszText, nm->item.cchTextMax - 1);
+            nm->item.pszText[length] = TEXT('\0');
+            break;
         }
-        break;
-
     case 1:
         {
-            if (!strcmp(eclipse->planete.c_str(),"None"))
-            {
-                sprintf(callbackScratch,"");
-                nm->item.pszText = callbackScratch;
-            }
-            else
-            {
-                strncpy(callbackScratch, UTF8ToCurrentCP(_(eclipse->sattelite.c_str())).c_str(), sizeof(callbackScratch) - 1);
-                nm->item.pszText = callbackScratch;
-            }
+            int length = UTF8ToTChar(eclipse->occulter->getName(true), nm->item.pszText, nm->item.cchTextMax - 1);
+            nm->item.pszText[length] = TEXT('\0');
+            break;
         }
-        break;
-
     case 2:
         {
-            bind_textdomain_codeset("celestia", CurrentCP());
             astro::Date startDate(eclipse->startTime);
-            if (!strcmp(eclipse->planete.c_str(),"None"))
-                sprintf(callbackScratch,"");
-            else
-                sprintf(callbackScratch, "%2d %s %4d",
-                        startDate.day,
-                        _(MonthNames[startDate.month - 1]),
-                        startDate.year);
-            nm->item.pszText = callbackScratch;
-            bind_textdomain_codeset("celestia", "UTF8");
+            auto out = fmt::format_to_n(nm->item.pszText, nm->item.cchTextMax - 1, TEXT("{:>2d} {} {:>4d}"),
+                                        startDate.day, monthNames[startDate.month - 1], startDate.year).out;
+            *out = TEXT('\0');
+            break;
         }
-        break;
-
     case 3:
         {
             astro::Date startDate(eclipse->startTime);
-            if (!strcmp(eclipse->planete.c_str(),"None"))
-                sprintf(callbackScratch,"");
-            else
-            {
-                sprintf(callbackScratch, "%02d:%02d",
-                        startDate.hour, startDate.minute);
-            }
-            nm->item.pszText = callbackScratch;
+            auto out = fmt::format_to_n(nm->item.pszText, nm->item.cchTextMax - 1, TEXT("{:02d}:{:02d}"),
+                                        startDate.hour, startDate.minute).out;
+            *out = TEXT('\0');
+            break;
         }
-        break;
-
     case 4:
         {
-            if (!strcmp(eclipse->planete.c_str(),"None"))
-            {
-                sprintf(callbackScratch,"");
-                nm->item.pszText = callbackScratch;
-            }
-            else
-            {
-                int minutes = (int) ((eclipse->endTime - eclipse->startTime) *
-                                    24 * 60);
-                sprintf(callbackScratch, "%02d:%02d", minutes / 60, minutes % 60);
-                nm->item.pszText = callbackScratch;
-            }
+            int minutes = static_cast<int>((eclipse->endTime - eclipse->startTime) * 24 * 60);
+            auto out = fmt::format_to_n(nm->item.pszText, nm->item.cchTextMax - 1, TEXT("{:02d}:{:02d}"),
+                                        minutes / 60, minutes % 60).out;
+            *out = TEXT('\0');
+            break;
         }
+    default:
+        *(nm->item.pszText) = TEXT('\0');
         break;
     }
 }
 
-
-void InitDateControls(HWND hDlg, astro::Date& newTime, SYSTEMTIME& fromTime, SYSTEMTIME& toTime)
+void
+InitDateControls(HWND hDlg, const astro::Date& newTime, SYSTEMTIME& fromTime, SYSTEMTIME& toTime)
 {
-    HWND dateItem = NULL;
-
     fromTime.wYear = newTime.year - 1;
     fromTime.wMonth = newTime.month;
     fromTime.wDay = newTime.day;
-    fromTime.wDayOfWeek = ((int) ((double) newTime + 0.5) + 1) % 7;
+    fromTime.wDayOfWeek = (static_cast<int>(static_cast<double>(newTime) + 0.5) + 1) % 7;
     fromTime.wHour = 0;
     fromTime.wMinute = 0;
-    fromTime.wSecond = (int) 0;
+    fromTime.wSecond = 0;
     fromTime.wMilliseconds = 0;
 
     toTime = fromTime;
     toTime.wYear += 2;
 
-    dateItem = GetDlgItem(hDlg, IDC_DATEFROM);
+    HWND dateItem = GetDlgItem(hDlg, IDC_DATEFROM);
     if (dateItem != NULL)
     {
-        DateTime_SetFormat(dateItem, "dd' 'MMM' 'yyy");
+        DateTime_SetFormat(dateItem, TEXT("dd' 'MMM' 'yyy"));
         DateTime_SetSystemtime(dateItem, GDT_VALID, &fromTime);
     }
     dateItem = GetDlgItem(hDlg, IDC_DATETO);
     if (dateItem != NULL)
     {
-        DateTime_SetFormat(dateItem, "dd' 'MMM' 'yyy");
+        DateTime_SetFormat(dateItem, TEXT("dd' 'MMM' 'yyy"));
         DateTime_SetSystemtime(dateItem, GDT_VALID, &toTime);
     }
 }
 
-
 struct EclipseFinderSortInfo
 {
-    int         subItem;
-    string      planete;
-    string      sattelite;
-    int32_t     Year;
-    int8_t      Month;
-    int8_t      Day;
-    int8_t      Hour;
+    int  iSubItem;
+    bool reverse;
 };
 
-
-int CALLBACK EclipseFinderCompareFunc(LPARAM lParam0, LPARAM lParam1,
-                                    LPARAM lParamSort)
+int CALLBACK
+EclipseFinderCompareBody(LPARAM lParam0, LPARAM lParam1, LPARAM lParamInfo)
 {
-    EclipseFinderSortInfo* sortInfo = reinterpret_cast<EclipseFinderSortInfo*>(lParamSort);
-    Eclipse* eclipse0 = reinterpret_cast<Eclipse*>(lParam0);
-    Eclipse* eclipse1 = reinterpret_cast<Eclipse*>(lParam1);
+    auto eclipse0 = reinterpret_cast<const Eclipse*>(lParam0);
+    auto eclipse1 = reinterpret_cast<const Eclipse*>(lParam1);
+    auto sortInfo = reinterpret_cast<const EclipseFinderSortInfo*>(lParamInfo);
 
-    switch (sortInfo->subItem)
+    int result = 0;
+    switch (sortInfo->iSubItem)
     {
-    case 1:
-        if (eclipse0->sattelite < eclipse1->sattelite)
-            return -1;
-        else if (eclipse1->sattelite < eclipse0->sattelite)
-            return 1;
-        else
-            return 0;
+    case 0:
+        result = CompareUTF8Localized(eclipse0->receiver->getName(true),
+                                      eclipse1->receiver->getName(true));
+        break;
 
-    case 4:
-        {
-            double duration0 = eclipse0->endTime - eclipse0->startTime;
-            double duration1 = eclipse1->endTime - eclipse1->startTime;
-            if (duration0 < duration1)
-                return -1;
-            else if (duration1 < duration0)
-                return 1;
-            else
-                return 0;
-        }
+    case 1:
+        result = CompareUTF8Localized(eclipse0->occulter->getName(true),
+                                      eclipse1->receiver->getName(true));
+        break;
 
     default:
-        if (eclipse0->startTime < eclipse1->startTime)
-            return -1;
-        else if (eclipse1->startTime < eclipse0->startTime)
-            return 1;
-        else
-            return 0;
+        break;
     }
+
+    return sortInfo->reverse ? -result : result;
 }
 
-BOOL APIENTRY EclipseListViewProc(HWND hWnd,
-                                  UINT message,
-                                  UINT wParam,
-                                  LONG lParam)
+int CALLBACK
+EclipseFinderCompareDuration(LPARAM lParam0, LPARAM lParam1, LPARAM lParamInfo)
+{
+    auto eclipse0 = reinterpret_cast<const Eclipse*>(lParam0);
+    auto eclipse1 = reinterpret_cast<const Eclipse*>(lParam1);
+    auto sortInfo = reinterpret_cast<const EclipseFinderSortInfo*>(lParamInfo);
+
+    double duration0 = eclipse0->endTime - eclipse0->startTime;
+    double duration1 = eclipse1->endTime - eclipse1->startTime;
+    auto result = static_cast<int>(math::sign(duration0 - duration1));
+    return sortInfo->reverse ? -result : result;
+}
+
+int CALLBACK
+EclipseFinderCompareStartTime(LPARAM lParam0, LPARAM lParam1, LPARAM lParamInfo)
+{
+    auto eclipse0 = reinterpret_cast<const Eclipse*>(lParam0);
+    auto eclipse1 = reinterpret_cast<const Eclipse*>(lParam1);
+    auto sortInfo = reinterpret_cast<const EclipseFinderSortInfo*>(lParamInfo);
+
+    auto result = static_cast<int>(math::sign(eclipse0->startTime - eclipse1->startTime));
+    return sortInfo->reverse ? -result : result;
+}
+
+constexpr std::array<PFNLVCOMPARE, 5> compareFuncs
+{
+    &EclipseFinderCompareBody,
+    &EclipseFinderCompareBody,
+    &EclipseFinderCompareStartTime,
+    &EclipseFinderCompareStartTime,
+    &EclipseFinderCompareDuration,
+};
+
+LRESULT CALLBACK
+EclipseListViewProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam,
+                    UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
 {
     switch(message)
     {
@@ -282,60 +280,64 @@ BOOL APIENTRY EclipseListViewProc(HWND hWnd,
             int listIndex = ListView_HitTest(hWnd, &lvHit);
             if (listIndex >= 0)
             {
-                SendMessage(GetParent(hWnd), WM_COMMAND, MAKEWPARAM(IDSETDATEANDGO, 0), NULL);
+                SendMessage(GetParent(hWnd), WM_COMMAND, MAKEWPARAM(IDSETDATEANDGO, 0), 0);
             }
         }
         break;
     }
 
-    return CallWindowProc(oldListViewProc, hWnd, message, wParam, lParam);
+    return DefSubclassProc(hWnd, message, wParam, lParam);
 }
 
-BOOL APIENTRY EclipseFinderProc(HWND hDlg,
-                                UINT message,
-                                WPARAM wParam,
-                                LPARAM lParam)
+INT_PTR APIENTRY
+EclipseFinderProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
 {
-    //EclipseFinderDialog* eclipseFinderDlg = reinterpret_cast<EclipseFinderDialog*>(GetWindowLong(hDlg, DWL_USER));
-    EclipseFinderDialog* eclipseFinderDlg = reinterpret_cast<EclipseFinderDialog*>(GetWindowLongPtr(hDlg, DWLP_USER));
+    if (message == WM_INITDIALOG)
+    {
+        EclipseFinderDialog* efd = reinterpret_cast<EclipseFinderDialog*>(lParam);
+        if (efd == NULL)
+            return EndDialog(hDlg, 0);
+
+        efd->monthNames = GetLocalizedMonthNames();
+
+        SetWindowLongPtr(hDlg, DWLP_USER, lParam);
+        HWND hwnd = GetDlgItem(hDlg, IDC_ECLIPSES_LIST);
+        InitEclipseFinderColumns(hwnd);
+        SendDlgItemMessage(hDlg, IDC_ECLIPSES_LIST, LVM_SETEXTENDEDLISTVIEWSTYLE, 0, LVS_EX_FULLROWSELECT);
+
+        CheckRadioButton(hDlg, IDC_SOLARECLIPSE, IDC_LUNARECLIPSE, IDC_SOLARECLIPSE);
+        efd->type = Eclipse::Solar;
+
+        constexpr std::size_t numItems = 6;
+        std::array<tstring, numItems> items
+        {
+            UTF8ToTString(_("Earth")),
+            UTF8ToTString(_("Jupiter")),
+            UTF8ToTString(_("Saturn")),
+            UTF8ToTString(_("Uranus")),
+            UTF8ToTString(_("Neptune")),
+            UTF8ToTString(_("Pluto")),
+        };
+
+        for (std::size_t i = 0; i < numItems; ++i)
+        {
+            SendDlgItemMessage(hDlg, IDC_ECLIPSETARGET, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(items[i].c_str()));
+        }
+
+        SendDlgItemMessage(hDlg, IDC_ECLIPSETARGET, CB_SETCURSEL, 0, 0);
+        efd->targetBody = EclipseFinderDialog::TargetBody::Earth;
+
+        InitDateControls(hDlg, astro::Date(efd->appCore->getSimulation()->getTime()), efd->fromTime, efd->toTime);
+
+        // Subclass the ListView to intercept WM_LBUTTONUP messages
+        SetWindowSubclass(hwnd, EclipseListViewProc, 0, 0);
+        return TRUE;
+    }
+
+    auto eclipseFinderDlg = reinterpret_cast<EclipseFinderDialog*>(GetWindowLongPtr(hDlg, DWLP_USER));
 
     switch (message)
     {
-    case WM_INITDIALOG:
-        {
-            EclipseFinderDialog* efd = reinterpret_cast<EclipseFinderDialog*>(lParam);
-            if (efd == NULL)
-                return EndDialog(hDlg, 0);
-            //SetWindowLong(hDlg, DWL_USER, lParam);
-            SetWindowLongPtr(hDlg, DWLP_USER, lParam);
-            HWND hwnd = GetDlgItem(hDlg, IDC_ECLIPSES_LIST);
-            InitEclipseFinderColumns(hwnd);
-            SendDlgItemMessage(hDlg, IDC_ECLIPSES_LIST, LVM_SETEXTENDEDLISTVIEWSTYLE, 0, LVS_EX_FULLROWSELECT);
-
-            bind_textdomain_codeset("celestia", CurrentCP());
-            CheckRadioButton(hDlg, IDC_SOLARECLIPSE, IDC_LUNARECLIPSE, IDC_SOLARECLIPSE);
-            efd->bSolar = true;
-
-            SendDlgItemMessage(hDlg, IDC_ECLIPSETARGET, CB_ADDSTRING, 0, (LPARAM)_("Earth"));
-            SendDlgItemMessage(hDlg, IDC_ECLIPSETARGET, CB_ADDSTRING, 0, (LPARAM)_("Jupiter"));
-            SendDlgItemMessage(hDlg, IDC_ECLIPSETARGET, CB_ADDSTRING, 0, (LPARAM)_("Saturn"));
-            SendDlgItemMessage(hDlg, IDC_ECLIPSETARGET, CB_ADDSTRING, 0, (LPARAM)_("Uranus"));
-            SendDlgItemMessage(hDlg, IDC_ECLIPSETARGET, CB_ADDSTRING, 0, (LPARAM)_("Neptune"));
-            SendDlgItemMessage(hDlg, IDC_ECLIPSETARGET, CB_ADDSTRING, 0, (LPARAM)_("Pluto"));
-            SendDlgItemMessage(hDlg, IDC_ECLIPSETARGET, CB_SETCURSEL, 0, 0);
-            efd->strPlaneteToFindOn = "Earth";
-            bind_textdomain_codeset("celestia", "UTF8");
-
-            InitDateControls(hDlg, astro::Date(efd->appCore->getSimulation()->getTime()), efd->fromTime, efd->toTime);
-
-            // Subclass the ListView to intercept WM_LBUTTONUP messages
-            HWND hCtrl;
-            if (hCtrl = GetDlgItem(hDlg, IDC_ECLIPSES_LIST))
-                oldListViewProc = (WNDPROC)SetWindowLongPtr(hCtrl, GWLP_WNDPROC, (LPARAM)EclipseListViewProc);
-                //oldListViewProc = (WNDPROC) SetWindowLong(hCtrl, GWL_WNDPROC, (DWORD) EclipseListViewProc);
-        }
-        return(TRUE);
-
     case WM_DESTROY:
         if (eclipseFinderDlg != NULL && eclipseFinderDlg->parent != NULL)
         {
@@ -355,10 +357,8 @@ BOOL APIENTRY EclipseFinderProc(HWND hDlg,
             {
                 HWND hwnd = GetDlgItem(hDlg, IDC_ECLIPSES_LIST);
                 ListView_DeleteAllItems(hwnd);
-                if (eclipseFinderDlg->strPlaneteToFindOn.empty())
-                    eclipseFinderDlg->strPlaneteToFindOn = "Earth";
+                eclipseFinderDlg->eclipseList.clear();
                 SetMouseCursor(IDC_WAIT);
-
 
                 astro::Date from(eclipseFinderDlg->fromTime.wYear,
                                  eclipseFinderDlg->fromTime.wMonth,
@@ -366,13 +366,21 @@ BOOL APIENTRY EclipseFinderProc(HWND hDlg,
                 astro::Date to(eclipseFinderDlg->toTime.wYear,
                                eclipseFinderDlg->toTime.wMonth,
                                eclipseFinderDlg->toTime.wDay);
-                EclipseFinder ef(eclipseFinderDlg->appCore,
-                                 eclipseFinderDlg->strPlaneteToFindOn,
-                                 eclipseFinderDlg->bSolar ? Eclipse::Solar : Eclipse::Moon,
-                                 (double) from,
-                                 (double) to);
-                eclipseList = ef.getEclipses();
-                InitEclipseFinderItems(hwnd, eclipseList);
+
+                const SolarSystemCatalog* systems = eclipseFinderDlg->appCore->getSimulation()->getUniverse()->getSolarSystemCatalog();
+                if (auto solarSystem = systems->find(0); solarSystem != systems->end())
+                {
+                    const PlanetarySystem* system = solarSystem->second->getPlanets();
+                    const Body* planet = system->find(TargetNames[static_cast<std::size_t>(eclipseFinderDlg->targetBody)]);
+                    if (planet != nullptr)
+                    {
+                        EclipseFinder ef(planet);
+                        ef.findEclipses((double)from, (double)to, eclipseFinderDlg->type, eclipseFinderDlg->eclipseList);
+                    }
+                }
+
+                InitEclipseFinderItems(hwnd, eclipseFinderDlg->eclipseList);
+                eclipseFinderDlg->sortColumn = -1;
                 SetMouseCursor(IDC_ARROW);
                 break;
             }
@@ -402,91 +410,76 @@ BOOL APIENTRY EclipseFinderProc(HWND hDlg,
                 sim->update(0.0);
 
                 double distance = target.radius() * 4.0;
-                sim->gotoLocation(UniversalCoord::Zero().offsetKm(Vector3d::UnitX() * distance),
-                                  YRotation(-PI / 2) * XRotation(-PI / 2),
+                sim->gotoLocation(UniversalCoord::Zero().offsetKm(Eigen::Vector3d::UnitX() * distance),
+                                  math::YRot90Conjugate<double> * math::XRot90Conjugate<double>,
                                   2.5);
             }
             break;
         case IDC_SOLARECLIPSE:
-                eclipseFinderDlg->bSolar = true;
+                eclipseFinderDlg->type = Eclipse::Solar;
             break;
         case IDC_LUNARECLIPSE:
-                eclipseFinderDlg->bSolar = false;
+                eclipseFinderDlg->type = Eclipse::Lunar;
             break;
         case IDC_ECLIPSETARGET:
             if(HIWORD(wParam) == CBN_SELCHANGE)
             {
-                switch(SendMessage((HWND)lParam, CB_GETCURSEL, 0, 0))
-                {
-                case 0:
-                    eclipseFinderDlg->strPlaneteToFindOn = "Earth";
-                    break;
-                case 1:
-                    eclipseFinderDlg->strPlaneteToFindOn = "Jupiter";
-                    break;
-                case 2:
-                    eclipseFinderDlg->strPlaneteToFindOn = "Saturn";
-                    break;
-                case 3:
-                    eclipseFinderDlg->strPlaneteToFindOn = "Uranus";
-                    break;
-                case 4:
-                    eclipseFinderDlg->strPlaneteToFindOn = "Neptune";
-                    break;
-                case 5:
-                    eclipseFinderDlg->strPlaneteToFindOn = "Pluto";
-                    break;
-                }
+                LRESULT index = SendMessage(reinterpret_cast<HWND>(lParam), CB_GETCURSEL, 0, 0);
+                if (index >= 0 && index < static_cast<LRESULT>(TargetBodyCount))
+                    eclipseFinderDlg->targetBody = static_cast<EclipseFinderDialog::TargetBody>(index);
             }
         }
         return TRUE;
 
     case WM_NOTIFY:
         {
-            LPNMHDR hdr = (LPNMHDR) lParam;
+            auto hdr = reinterpret_cast<LPNMHDR>(lParam);
 
             if(hdr->idFrom == IDC_ECLIPSES_LIST)
             {
                 switch(hdr->code)
                 {
                 case LVN_GETDISPINFO:
-                    EclipseFinderDisplayItem((LPNMLVDISPINFOA) lParam);
+                    EclipseFinderDisplayItem(reinterpret_cast<NMLVDISPINFO*>(lParam), eclipseFinderDlg->monthNames);
                     break;
-                case LVN_ITEMCHANGED:
-                    {
-                        LPNMLISTVIEW nm = (LPNMLISTVIEW) lParam;
-                        if ((nm->uNewState & LVIS_SELECTED) != 0)
-                        {
-                            Eclipse* eclipse = reinterpret_cast<Eclipse*>(nm->lParam);
-                            if (eclipse != NULL)
-                            {
-                                eclipseFinderDlg->TimetoSet_ =
-                                    (eclipse->startTime + eclipse->endTime) / 2.0f;
-                                eclipseFinderDlg->BodytoSet_ = eclipse->body;
-                            }
-                        }
-                        break;
-                    }
-                case LVN_COLUMNCLICK:
-                    {
-                        HWND hwnd = GetDlgItem(hDlg, IDC_ECLIPSES_LIST);
-                        if (hwnd != 0)
-                        {
-                            LPNMLISTVIEW nm = (LPNMLISTVIEW) lParam;
-                            EclipseFinderSortInfo sortInfo;
-                            sortInfo.subItem = nm->iSubItem;
-//                            sortInfo.sattelite = ;
-//                            sortInfo.pos = eclipseFinderDlg->pos;
-                            ListView_SortItems(hwnd, EclipseFinderCompareFunc,
-                                               reinterpret_cast<LPARAM>(&sortInfo));
-                        }
-                    }
 
+                case LVN_ITEMCHANGED:
+                    if (auto nm = reinterpret_cast<LPNMLISTVIEW>(lParam); (nm->uNewState & LVIS_SELECTED) != 0)
+                    {
+                        auto eclipse = reinterpret_cast<const Eclipse*>(nm->lParam);
+                        if (eclipse != NULL)
+                        {
+                            eclipseFinderDlg->TimetoSet_ =
+                                (eclipse->startTime + eclipse->endTime) / 2.0f;
+                            eclipseFinderDlg->BodytoSet_ = eclipseFinderDlg->type == Eclipse::Solar
+                                                         ? eclipse->receiver
+                                                         : eclipse->occulter;
+                        }
+                    }
+                    break;
+
+                case LVN_COLUMNCLICK:
+                    if (HWND hwnd = GetDlgItem(hDlg, IDC_ECLIPSES_LIST); hwnd != 0)
+                    {
+                        auto nm = reinterpret_cast<LPNMLISTVIEW>(lParam);
+                        if (nm->iSubItem == eclipseFinderDlg->sortColumn)
+                            eclipseFinderDlg->sortColumnReverse = !eclipseFinderDlg->sortColumnReverse;
+                        else
+                            eclipseFinderDlg->sortColumnReverse = false;
+                        eclipseFinderDlg->sortColumn = nm->iSubItem;
+
+                        EclipseFinderSortInfo sortInfo;
+                        sortInfo.iSubItem = nm->iSubItem;
+                        sortInfo.reverse = eclipseFinderDlg->sortColumnReverse;
+                        auto compareFunc = compareFuncs[static_cast<std::size_t>(nm->iSubItem)];
+                        ListView_SortItems(hwnd, compareFunc, reinterpret_cast<LPARAM>(&sortInfo));
+                    }
+                    break;
                 }
             }
             if (hdr->code == DTN_DATETIMECHANGE)
             {
-                LPNMDATETIMECHANGE change = (LPNMDATETIMECHANGE) lParam;
+                auto change = reinterpret_cast<LPNMDATETIMECHANGE>(lParam);
                 if (change->dwFlags == GDT_VALID)
                 {
                     if (wParam == IDC_DATEFROM)
@@ -510,6 +503,7 @@ BOOL APIENTRY EclipseFinderProc(HWND hDlg,
     return FALSE;
 }
 
+} // end unnamed namespace
 
 EclipseFinderDialog::EclipseFinderDialog(HINSTANCE appInstance,
                                          HWND _parent,
@@ -521,6 +515,10 @@ EclipseFinderDialog::EclipseFinderDialog(HINSTANCE appInstance,
     hwnd = CreateDialogParam(appInstance,
                              MAKEINTRESOURCE(IDD_ECLIPSEFINDER),
                              parent,
-                             (DLGPROC)EclipseFinderProc,
+                             &EclipseFinderProc,
                              reinterpret_cast<LPARAM>(this));
 }
+
+EclipseFinderDialog::~EclipseFinderDialog() = default;
+
+} // end namespace celestia::win32

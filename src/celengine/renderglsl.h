@@ -2,7 +2,7 @@
 //
 // Functions for rendering objects using dynamically generated GLSL shaders.
 //
-// Copyright (C) 2006-2009, the Celestia Development Team
+// Copyright (C) 2006-2020, the Celestia Development Team
 // Original version by Chris Laurel <claurel@gmail.com>
 //
 // This program is free software; you can redistribute it and/or
@@ -10,24 +10,39 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#ifndef _CELENGINE_RENDERGLSL_H_
-#define _CELENGINE_RENDERGLSL_H_
+#pragma once
 
-#include <celengine/lightenv.h>
+#include <cstdint>
+
+#include <Eigen/Core>
 #include <Eigen/Geometry>
 
+#include <celutil/reshandle.h>
+
+class Atmosphere;
+class Geometry;
+class LightingState;
+struct Matrices;
 class Renderer;
+struct RenderInfo;
+class Texture;
+
+namespace celestia::math
+{
+class Frustum;
+}
 
 void renderEllipsoid_GLSL(const RenderInfo& ri,
-                       const LightingState& ls,
-                       Atmosphere* atmosphere,
-                       float cloudTexOffset,
-                       const Eigen::Vector3f& semiAxes,
-                       unsigned int textureRes,
-                       uint64_t renderFlags,
-                       const Eigen::Quaternionf& planetOrientation,
-                       const Frustum& frustum,
-                       const Renderer* renderer);
+                          const LightingState& ls,
+                          Atmosphere* atmosphere,
+                          float cloudTexOffset,
+                          const Eigen::Vector3f& semiAxes,
+                          unsigned int textureRes,
+                          std::uint64_t renderFlags,
+                          const Eigen::Quaternionf& planetOrientation,
+                          const celestia::math::Frustum& frustum,
+                          const Matrices &m,
+                          Renderer* renderer);
 
 void renderGeometry_GLSL(Geometry* geometry,
                          const RenderInfo& ri,
@@ -35,10 +50,11 @@ void renderGeometry_GLSL(Geometry* geometry,
                          const LightingState& ls,
                          const Atmosphere* atmosphere,
                          float geometryScale,
-                         uint64_t renderFlags,
+                         std::uint64_t renderFlags,
                          const Eigen::Quaternionf& planetOrientation,
                          double tsec,
-                         const Renderer* renderer);
+                         const Matrices &m,
+                         Renderer* renderer);
 
 void renderClouds_GLSL(const RenderInfo& ri,
                        const LightingState& ls,
@@ -48,85 +64,18 @@ void renderClouds_GLSL(const RenderInfo& ri,
                        float texOffset,
                        const Eigen::Vector3f& semiAxes,
                        unsigned int textureRes,
-                       uint64_t renderFlags,
+                       std::uint64_t renderFlags,
                        const Eigen::Quaternionf& planetOrientation,
-                       const Frustum& frustum,
-                       const Renderer* renderer);
-
-void renderAtmosphere_GLSL(const RenderInfo& ri,
-                           const LightingState& ls,
-                           Atmosphere* atmosphere,
-                           float radius,
-                           const Eigen::Quaternionf& planetOrientation,
-                           const Frustum& frustum,
-                           const Renderer* renderer);
-
-void renderRings_GLSL(RingSystem& rings,
-                      RenderInfo& ri,
-                      const LightingState& ls,
-                      float planetRadius,
-                      float planetOblateness,
-                      unsigned int textureResolution,
-                      bool renderShadow,
-                      unsigned int nSections,
-                      const Renderer* renderer);
+                       const celestia::math::Frustum& frustum,
+                       const Matrices &m,
+                       Renderer* renderer);
 
 void renderGeometry_GLSL_Unlit(Geometry* geometry,
                                const RenderInfo& ri,
                                ResourceHandle texOverride,
                                float geometryScale,
-                               uint64_t renderFlags,
+                               std::uint64_t renderFlags,
                                const Eigen::Quaternionf& planetOrientation,
                                double tsec,
-                               const Renderer* renderer);
-
-
-class FramebufferObject
-{
-public:
-    enum
-    {
-        ColorAttachment = 0x1,
-        DepthAttachment = 0x2
-    };
-    FramebufferObject(GLuint width, GLuint height, unsigned int attachments);
-    ~FramebufferObject();
-
-    bool isValid() const;
-    GLuint width() const
-    {
-        return m_width;
-    }
-
-    GLuint height() const
-    {
-        return m_height;
-    }
-
-    GLuint colorTexture() const;
-    GLuint depthTexture() const;
-
-    bool bind();
-    bool unbind();
-
-
-
-private:
-    void generateColorTexture();
-    void generateDepthTexture();
-    void generateFbo(unsigned int attachments);
-    void cleanup();
-
-private:
-    GLuint m_width;
-    GLuint m_height;
-    GLuint m_colorTexId;
-    GLuint m_depthTexId;
-    GLuint m_fboId;
-    GLenum m_status;
-};
-
-
-#endif // _CELENGINE_RENDERGLSL_H_
-
-
+                               const Matrices &m,
+                               Renderer* renderer);

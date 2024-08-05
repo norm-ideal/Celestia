@@ -7,15 +7,21 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#ifndef _CELENGINE_CONSOLE_H_
-#define _CELENGINE_CONSOLE_H_
+#pragma once
 
+#include <memory>
+#include <ostream>
+#include <streambuf>
 #include <string>
-#include <iostream>
-#include <celtxf/texturefont.h>
+#include <vector>
 
+#include <Eigen/Core>
 
+#include <celutil/utf8.h>
+
+class Color;
 class Console;
+class TextureFont;
 
 // Custom streambuf class to support C++ operator style output.  The
 // output is completely unbuffered.
@@ -26,26 +32,27 @@ class ConsoleStreamBuf : public std::streambuf
 
     void setConsole(Console*);
 
-    int overflow(int c = EOF);
-    enum UTF8DecodeState
-    {
-        UTF8DecodeStart     = 0,
-        UTF8DecodeMultibyte = 1,
-    };
+    int overflow(int c = EOF) override;
 
  private:
+    enum class UTF8DecodeState
+    {
+        Start     = 0,
+        Multibyte = 1,
+    };
+
     Console* console{ nullptr };
-    UTF8DecodeState decodeState{ UTF8DecodeStart };
-    wchar_t decodedChar{ 0 };
-    unsigned int decodeShift{ 0 };
+    UTF8Validator validator{};
 };
 
-
+class Renderer;
 class Console : public std::ostream
 {
  public:
-    Console(int _nRows, int _nColumns);
-    ~Console();
+    static constexpr const int PageRows = 10;
+
+    Console(Renderer& renderer, int _nRows, int _nColumns);
+    ~Console() override = default;
 
     bool setRowCount(int _nRows);
 
@@ -54,23 +61,28 @@ class Console : public std::ostream
     void render(int rowHeight);
 
     void setScale(int, int);
-    void setFont(TextureFont*);
+    void setFont(const std::shared_ptr<TextureFont>&);
+    void setColor(float r, float g, float b, float a) const;
+    void setColor(const Color& c) const;
 
-    void print(wchar_t);
-    void print(char*);
+    void moveBy(float dx, float dy);
+    void setWindowHeight(int);
+    void scroll(int lines);
+
+ private:
+    void savePos();
+    void restorePos();
+
+    void print(char16_t);
     void newline();
 
-    int getRow() const;
-    int getColumn() const;
     int getWindowRow() const;
     void setWindowRow(int);
-    void setWindowHeight(int);
 
     int getHeight() const;
     int getWidth() const;
 
- private:
-    wchar_t* text{ nullptr };
+    std::u16string text{ };
     int nRows;
     int nColumns;
     int row{ 0 };
@@ -82,11 +94,24 @@ class Console : public std::ostream
 
     int xscale{ 1 };
     int yscale{ 1 };
-    TextureFont* font{ nullptr };
+    std::shared_ptr<TextureFont> font{ nullptr };
+    Renderer& renderer;
 
     ConsoleStreamBuf sbuf;
 
     bool autoScroll{ true };
-};
 
-#endif // _CELENGINE_CONSOLE_H_
+    struct CursorPosition
+    {
+        void reset()
+        {
+            x = y = 0.125f;
+        }
+        float x, y;
+    };
+    CursorPosition global { 0.0f, 0.0f };
+    std::vector<CursorPosition> posStack;
+    Eigen::Matrix4f projection;
+
+    friend class ConsoleStreamBuf;
+};

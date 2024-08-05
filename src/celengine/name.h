@@ -12,47 +12,39 @@
 
 #pragma once
 
-#include <string>
-#include <iostream>
+#include <cstdint>
 #include <map>
+#include <string>
+#include <string_view>
 #include <vector>
-#include <celutil/debug.h>
-#include <celutil/util.h>
-#include <celutil/utf8.h>
+
+#include <celengine/astroobj.h>
+#include <celutil/stringutils.h>
 
 // TODO: this can be "detemplatized" by creating e.g. a global-scope enum InvalidCatalogNumber since there
 // lies the one and only need for type genericity.
 class NameDatabase
 {
- public:
-    typedef std::map<std::string, uint32_t, CompareIgnoringCasePredicate> NameIndex;
-    typedef std::multimap<uint32_t, std::string> NumberIndex;
-    enum {
-        InvalidCatalogNumber = 0xffffffff
-    };
+public:
+    using NameIndex = std::map<std::string, AstroCatalog::IndexNumber, CompareIgnoringCasePredicate>;
+    using NumberIndex = std::multimap<AstroCatalog::IndexNumber, std::string>;
 
- public:
-    NameDatabase() {};
-
-
-    uint32_t getNameCount() const;
-
-    void add(const uint32_t, const std::string&, bool parseGreek = true);
+    void add(AstroCatalog::IndexNumber, std::string_view);
 
     // delete all names associated with the specified catalog number
-    void erase(const uint32_t);
+    void erase(AstroCatalog::IndexNumber);
 
-    uint32_t      getCatalogNumberByName(const std::string&) const;
-    std::string getNameByCatalogNumber(const uint32_t)       const;
+    AstroCatalog::IndexNumber getCatalogNumberByName(std::string_view, bool i18n) const;
 
-    NumberIndex::const_iterator getFirstNameIter(const uint32_t catalogNumber) const;
+    NumberIndex::const_iterator getFirstNameIter(AstroCatalog::IndexNumber catalogNumber) const;
     NumberIndex::const_iterator getFinalNameIter() const;
 
-    std::vector<std::string> getCompletion(const std::string& name, bool greek = true) const;
-    std::vector<std::string> getCompletion(const std::vector<std::string> &list) const;
+    void getCompletion(std::vector<std::string>& completion, std::string_view name) const;
 
- protected:
+private:
     NameIndex   nameIndex;
+#ifdef ENABLE_NLS
+    NameIndex   localizedNameIndex;
+#endif
     NumberIndex numberIndex;
 };
-

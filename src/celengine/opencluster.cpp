@@ -7,15 +7,12 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#include "celestia.h"
+#include <config.h>
 #include "render.h"
-#include "astro.h"
 #include "opencluster.h"
 #include "meshmanager.h"
-#include "vecgl.h"
 #include <celmath/mathlib.h>
-#include <celutil/util.h>
-#include <celutil/debug.h>
+#include <celutil/gettext.h>
 #include <algorithm>
 
 using namespace Eigen;
@@ -40,13 +37,13 @@ string OpenCluster::getDescription() const
 
 
 
-const char* OpenCluster::getObjTypeName() const
+DeepSkyObjectType OpenCluster::getObjType() const
 {
-    return "opencluster";
+    return DeepSkyObjectType::OpenCluster;
 }
 
 
-bool OpenCluster::pick(const Ray3d& ray,
+bool OpenCluster::pick(const Eigen::ParametrizedLine<double, 3>& ray,
                        double& distanceToPicker,
                        double& cosAngleToBoundCenter) const
 {
@@ -55,7 +52,7 @@ bool OpenCluster::pick(const Ray3d& ray,
 }
 
 
-bool OpenCluster::load(AssociativeArray* params, const string& resPath)
+bool OpenCluster::load(const AssociativeArray* params, const fs::path& resPath)
 {
     // No parameters specific to open cluster, though a list of member stars
     // could be useful.
@@ -63,20 +60,7 @@ bool OpenCluster::load(AssociativeArray* params, const string& resPath)
 }
 
 
-void OpenCluster::render(const Vector3f& /*unused*/,
-                         const Quaternionf& /*unused*/,
-                         float /*unused*/,
-                         float /*unused*/,
-                         const Renderer* /*unused*/)
-{
-    // Nothing to do right now; open clusters are only visible as their
-    // constituent stars and a label when labels are turned on.  A good idea
-    // would be to add an 'sky chart' mode, in which clusters are rendered as
-    // circles.
-}
-
-
-unsigned int OpenCluster::getRenderMask() const
+uint64_t OpenCluster::getRenderMask() const
 {
     return Renderer::ShowOpenClusters;
 }

@@ -10,25 +10,34 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#ifndef _INFOPANEL_H_
-#define _INFOPANEL_H_
+#pragma once
 
 #include <QDockWidget>
-#include <QTextStream>
-#include "celengine/selection.h"
 
-class QTextBrowser;
-class Universe;
-class QModelIndex;
-class Selection;
 class QItemSelection;
+class QModelIndex;
+class QString;
+class QTextBrowser;
+class QTextStream;
+class QWidget;
+
+class Body;
 class CelestiaCore;
+class DeepSkyObject;
+class Selection;
+class Star;
+class Universe;
+
+namespace celestia::qt
+{
 
 class ModelHelper
 {
  public:
+    virtual ~ModelHelper() = default;
     virtual Selection itemForInfoPanel(const QModelIndex&) = 0;
 };
+
 
 class InfoPanel : public QDockWidget
 {
@@ -53,4 +62,4 @@ class InfoPanel : public QDockWidget
     QTextBrowser* textBrowser{nullptr};
 };
 
-#endif // _INFOPANEL_H_
+} // end namespace celestia::qt

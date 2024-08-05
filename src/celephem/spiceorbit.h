@@ -9,13 +9,17 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#ifndef _CELENGINE_SPICEORBIT_H_
-#define _CELENGINE_SPICEORBIT_H_
+#pragma once
 
-#include "orbit.h"
 #include <string>
-#include <list>
 
+#include <Eigen/Core>
+
+#include <celcompat/filesystem.h>
+#include "orbit.h"
+
+namespace celestia::ephem
+{
 
 class SpiceOrbit : public CachingOrbit
 {
@@ -30,23 +34,32 @@ class SpiceOrbit : public CachingOrbit
                std::string  _originName,
                double _period,
                double _boundingRadius);
-    virtual ~SpiceOrbit() = default;
+    ~SpiceOrbit() override = default;
 
-    bool init(const std::string& path,
-              const std::list<std::string>* requiredKernels);
+    template<typename It>
+    bool init(const fs::path& path, It begin, It end)
+    {
+        // Load required kernel files
+        while (begin != end)
+        {
+            if (!loadRequiredKernel(path, *(begin++)))
+                return false;
+        }
+        return init();
+    }
 
-    virtual bool isPeriodic() const;
-    virtual double getPeriod() const;
+    bool isPeriodic() const override;
+    double getPeriod() const override;
 
-    virtual double getBoundingRadius() const
+    double getBoundingRadius() const override
     {
         return boundingRadius;
     }
 
-    Eigen::Vector3d computePosition(double jd) const;
-    Eigen::Vector3d computeVelocity(double jd) const;
+    Eigen::Vector3d computePosition(double jd) const override;
+    Eigen::Vector3d computeVelocity(double jd) const override;
 
-    virtual void getValidRange(double& begin, double& end) const;
+    void getValidRange(double& begin, double& end) const override;
 
  private:
     const std::string targetBodyName;
@@ -63,6 +76,9 @@ class SpiceOrbit : public CachingOrbit
     double validIntervalEnd;
 
     bool useDefaultTimeInterval;
+
+    bool init();
+    bool loadRequiredKernel(const fs::path&, const std::string&);
 };
 
-#endif // _CELENGINE_SPICEORBIT_H_
+}

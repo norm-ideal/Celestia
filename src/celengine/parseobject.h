@@ -10,20 +10,25 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#ifndef _CELENGINE_PARSEOBJECT_H_
-#define _CELENGINE_PARSEOBJECT_H_
+#pragma once
 
-#include <string>
-#include <celephem/orbit.h>
-#include <celephem/rotation.h>
-#include "parser.h"
+#include <memory>
+#include <string_view>
 
+#include <celcompat/filesystem.h>
+#include "frame.h"
+
+class AssociativeArray;
 class Body;
-class Star;
-class ReferenceFrame;
-class TwoVectorFrame;
 class Universe;
+class Value;
 class Selection;
+
+namespace celestia::ephem
+{
+class Orbit;
+class RotationModel;
+}
 
 enum class DataDisposition
 {
@@ -32,28 +37,30 @@ enum class DataDisposition
     Replace
 };
 
+bool
+ParseDate(const AssociativeArray* hash, std::string_view name, double& jd);
 
-bool ParseDate(Hash* hash, const string& name, double& jd);
+std::shared_ptr<const celestia::ephem::Orbit>
+CreateOrbit(const Selection& centralObject,
+            const AssociativeArray* planetData,
+            const fs::path& path,
+            bool usePlanetUnits);
 
-Orbit* CreateOrbit(const Selection& centralObject,
-                   Hash* planetData,
-                   const std::string& path,
-                   bool usePlanetUnits);
+std::shared_ptr<const celestia::ephem::RotationModel>
+CreateRotationModel(const AssociativeArray* rotationData,
+                    const fs::path& path,
+                    double syncRotationPeriod);
 
-RotationModel* CreateRotationModel(Hash* rotationData,
-                                   const string& path,
-                                   double syncRotationPeriod);
+std::shared_ptr<const celestia::ephem::RotationModel>
+CreateDefaultRotationModel(double syncRotationPeriod);
 
-RotationModel* CreateDefaultRotationModel(double syncRotationPeriod);
+ReferenceFrame::SharedConstPtr
+CreateReferenceFrame(const Universe& universe,
+                     const Value* frameValue,
+                     const Selection& defaultCenter,
+                     Body* defaultObserver);
 
-ReferenceFrame* CreateReferenceFrame(const Universe& universe,
-                                     Value* frameValue,
-                                     const Selection& defaultCenter,
-                                     Body* defaultObserver);
-
-TwoVectorFrame* CreateTopocentricFrame(const Selection& center,
-                                       const Selection& target,
-                                       const Selection& observer);
-
-
-#endif // _CELENGINE_PARSEOBJECT_H_
+std::shared_ptr<const TwoVectorFrame>
+CreateTopocentricFrame(const Selection& center,
+                       const Selection& target,
+                       const Selection& observer);

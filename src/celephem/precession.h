@@ -10,7 +10,9 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-namespace astro
+#pragma once
+
+namespace celestia::ephem
 {
 
 // PA and QA are the location of the pole of the ecliptic of date
@@ -64,4 +66,4 @@ extern EclipticAngles EclipticPrecessionAngles_P03(double T);
 extern PrecessionAngles PrecObliquity_P03(double T);
 extern EquatorialPrecessionAngles EquatorialPrecessionAngles_P03(double T);
 
-};
+}
